@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0d0f14;
+    color: #e2e8f0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    user-select: none;
+    font-size: 13px;
+  }
+
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a2f45; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #374151; }
+}
+
+@layer components {
+  .panel { @apply bg-cs-card border border-cs-border rounded-xl; }
+  .btn { @apply px-3 py-1.5 rounded-lg text-sm font-medium transition-all cursor-pointer; }
+  .btn-primary { @apply btn bg-cs-accent text-white hover:brightness-110 font-semibold; }
+  .btn-ghost { @apply btn bg-transparent border border-cs-border text-cs-muted hover:border-cs-border2 hover:text-cs-text; }
+  .section-header { @apply text-[9px] font-bold uppercase tracking-widest text-cs-muted px-3 py-2; }
+  
+  /* Pyöreät toggle-napit */
+  .round-btn {
+    @apply px-2.5 py-1 rounded-lg text-[11px] font-bold border border-cs-border
+           text-cs-muted hover:border-cs-border2 hover:text-cs-text transition-all cursor-pointer;
+    background: transparent;
+  }
+  .round-btn.active {
+    @apply bg-cs-accent border-cs-accent text-white;
+  }
+  .round-btn.ct { @apply text-cs-ct hover:bg-cs-ct/10; }
+  .round-btn.t  { @apply text-cs-t  hover:bg-cs-t/10; }
+}

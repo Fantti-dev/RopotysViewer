@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-electron/
+out/
+python/venv/
+*.pyc
+__pycache__/
+.env
+*.dem
+maps/*.png

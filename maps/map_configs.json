@@ -1,0 +1,87 @@
+{
+  "de_dust2": {
+    "pos_x": -2476,
+    "pos_y": 3239,
+    "scale": 4.4,
+    "has_lower": false,
+    "image": "de_dust2"
+  },
+  "de_mirage": {
+    "pos_x": -3230,
+    "pos_y": 1713,
+    "scale": 4.9,
+    "has_lower": false,
+    "image": "de_mirage"
+  },
+  "de_inferno": {
+    "pos_x": -2087,
+    "pos_y": 3870,
+    "scale": 4.9,
+    "has_lower": false,
+    "image": "de_inferno"
+  },
+  "de_nuke": {
+    "pos_x": -3453,
+    "pos_y": 2887,
+    "scale": 7.0,
+    "has_lower": true,
+    "z_threshold": -495,
+    "image": "de_nuke_upper",
+    "image_lower": "de_nuke_lower",
+    "lower_offset_x": -3453,
+    "lower_offset_y": 2887,
+    "lower_scale": 7.0
+  },
+  "de_ancient": {
+    "pos_x": -2953,
+    "pos_y": 2164,
+    "scale": 5.0,
+    "has_lower": false,
+    "image": "de_ancient"
+  },
+  "de_anubis": {
+    "pos_x": -2796,
+    "pos_y": 3328,
+    "scale": 5.22,
+    "has_lower": false,
+    "image": "de_anubis"
+  },
+  "de_vertigo": {
+    "pos_x": -3168,
+    "pos_y": 1762,
+    "scale": 4.0,
+    "has_lower": true,
+    "z_threshold": 11700,
+    "image": "de_vertigo_upper",
+    "image_lower": "de_vertigo_lower",
+    "lower_offset_x": -3168,
+    "lower_offset_y": 1762,
+    "lower_scale": 4.0
+  },
+  "de_train": {
+    "pos_x": -2477,
+    "pos_y": 2392,
+    "scale": 4.7,
+    "has_lower": false,
+    "image": "de_train"
+  },
+  "de_overpass": {
+    "pos_x": -4831,
+    "pos_y": 1781,
+    "scale": 5.2,
+    "has_lower": true,
+    "z_threshold": 0,
+    "image": "de_overpass_upper",
+    "image_lower": "de_overpass_lower",
+    "lower_offset_x": -4831,
+    "lower_offset_y": 1781,
+    "lower_scale": 5.2
+  },
+  "de_cache": {
+    "pos_x": -2000,
+    "pos_y": 3250,
+    "scale": 5.5,
+    "has_lower": false,
+    "image": "de_cache"
+  }
+}
