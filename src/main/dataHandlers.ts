@@ -525,8 +525,11 @@ export function registerDataHandlers() {
             SUM(CASE WHEN REPLACE(d.weapon,'weapon_','') IN ('hegrenade','molotov','incgrenade')
               THEN d.damage ELSE 0 END) AS util_damage
           FROM damage d
+          JOIN players pa ON pa.demo_id=d.demo_id AND pa.steam_id=d.attacker_steam_id
+          JOIN players pv ON pv.demo_id=d.demo_id AND pv.steam_id=d.victim_steam_id
           JOIN rounds r ON r.demo_id=d.demo_id AND r.round_num=d.round_num
           WHERE d.demo_id=@demoId AND d.round_num < @upToRound AND d.round_num > 0 AND ISNULL(r.is_knife,0)=0
+            AND pa.team_start <> pv.team_start
           GROUP BY d.attacker_steam_id
         `),
       p.request()

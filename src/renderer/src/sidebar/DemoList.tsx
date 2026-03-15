@@ -86,7 +86,10 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
       prewarmRoundsForInstantOpen(demo.id, firstThree).catch(() => {})
 
       // Käynnistä hiljainen taustacache kaikille muille kierroksille.
-      const roundNums = playableRounds.map((r: any) => r.round_num)
+      const prewarmedSet = new Set<number>(firstThree)
+      const roundNums = playableRounds
+        .map((r: any) => r.round_num)
+        .filter((roundNum: number) => !prewarmedSet.has(roundNum))
       preloadRoundsSilently(demo.id, roundNums, firstRound).catch(() => {})
 
       onSelect?.()

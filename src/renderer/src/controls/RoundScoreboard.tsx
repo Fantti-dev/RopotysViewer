@@ -59,9 +59,11 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
     if (!selectedDemo) return []
 
     const map = new Map<string, PlayerStats>()
+    const teamBySteam = new Map<string, string>()
     const historyRoundsPlayed = rounds.filter(r => !r.is_knife && r.round_num > 0 && r.round_num < currentRound).length
 
     players.forEach(p => {
+      teamBySteam.set(String(p.steam_id), p.team_start)
       map.set(String(p.steam_id), {
         name: p.name, team: p.team_start,
         kills:0, deaths:0, assists:0, hs:0,
@@ -143,8 +145,14 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
 
       damage.filter(d => d.tick <= currentTick).forEach(d => {
         const attackerId = String(d.attacker_steam_id)
+        const victimId = String(d.victim_steam_id)
         const atk = map.get(attackerId)
         if (!atk) return
+        const attackerTeam = teamBySteam.get(attackerId)
+        const victimTeam = teamBySteam.get(victimId)
+        if (attackerTeam && victimTeam && attackerTeam === victimTeam) {
+          return
+        }
         atk.totalDamage += d.damage ?? 0
         if (UTIL_GRENADES.has((d.weapon ?? '').replace('weapon_', ''))) {
           atk.utilDamage += d.damage ?? 0

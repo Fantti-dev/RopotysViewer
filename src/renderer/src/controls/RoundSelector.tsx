@@ -5,6 +5,7 @@ export const KNIFE_ROUND = -1  // varattu myöhempää käyttöä varten
 
 let activeRequestId = 0
 let preloadSessionId = 0
+const inFlightRoundLoads = new Map<string, Promise<any>>()
 
 
 function getRoundLoadOptions() {
@@ -29,6 +30,30 @@ const FULL_PRELOAD_OPTIONS = {
 }
 
 const FULL_PRELOAD_VARIANT = optionsVariant(FULL_PRELOAD_OPTIONS)
+
+function loadKey(demoId: number, roundNum: number, variant: string) {
+  return `${demoId}:${roundNum}:${variant}`
+}
+
+function loadRoundAllDedup(
+  demoId: number,
+  roundNum: number,
+  options: { includeKills?: boolean; includeSmokes?: boolean; includeBomb?: boolean; includeShots?: boolean },
+  variant: string
+) {
+  const key = loadKey(demoId, roundNum, variant)
+  const existing = inFlightRoundLoads.get(key)
+  if (existing) return existing
+
+  const req = window.electronAPI.loadRoundAll(demoId, roundNum, options)
+  inFlightRoundLoads.set(key, req)
+  req.finally(() => {
+    if (inFlightRoundLoads.get(key) === req) {
+      inFlightRoundLoads.delete(key)
+    }
+  })
+  return req
+}
 
 
 function setRoundPreloadState(total: number, done: number, active: boolean) {
@@ -78,7 +103,7 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
 
     try {
       // Fetch can run in background even during playback.
-      const raw = await window.electronAPI.loadRoundAll(demoId, roundNum, FULL_PRELOAD_OPTIONS)
+      const raw = await loadRoundAllDedup(demoId, roundNum, FULL_PRELOAD_OPTIONS, FULL_PRELOAD_VARIANT)
       if (sessionId !== preloadSessionId) return
 
       const roundInfo = rounds.find(r => r.round_num === roundNum)
@@ -111,7 +136,7 @@ export async function prewarmRoundsForInstantOpen(demoId: number, roundNums: num
 
     try {
       const startedAt = performance.now()
-      const raw = await window.electronAPI.loadRoundAll(demoId, roundNum, options)
+      const raw = await loadRoundAllDedup(demoId, roundNum, options, variant)
       const roundInfo = rounds.find(r => r.round_num === roundNum)
       await setCachedRoundBackground(demoId, roundNum, raw, roundInfo?.start_tick, variant)
       window.electronAPI.debugLog('round.prewarm.done', {
@@ -147,7 +172,7 @@ export async function loadRoundData(demoId: number, roundNum: number) {
     return
   }
 
-  const raw = await window.electronAPI.loadRoundAll(demoId, roundNum, options)
+  const raw = await loadRoundAllDedup(demoId, roundNum, options, variant)
 
   if (requestId !== activeRequestId) {
     return
