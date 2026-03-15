@@ -1,5 +1,7 @@
 import { useEffect, useRef, useMemo } from 'react'
 import { usePlaybackStore } from '../stores'
+import { useDemoStore } from '../stores'
+import { loadRoundData } from './RoundSelector'
 
 const SPEEDS   = [0.25, 0.5, 1, 2, 4, 8]
 const TICKRATE = 64
@@ -11,6 +13,7 @@ export default function PlaybackBar() {
     setTick, setPlaying, setSpeed,
     kills, bombEvents, grenades, smokeEffects,
   } = usePlaybackStore()
+  const { selectedDemo, rounds } = useDemoStore()
 
   const rafRef       = useRef<number | null>(null)
   const lastTimeRef  = useRef<number>(0)
@@ -18,6 +21,7 @@ export default function PlaybackBar() {
   const isPlayingRef = useRef(false)
   const allTicksRef  = useRef(allTicks)
   const speedRef     = useRef(playbackSpeed)
+  const lastJankLogRef = useRef<number>(0)
 
   useEffect(() => { allTicksRef.current = allTicks }, [allTicks])
   useEffect(() => { speedRef.current = playbackSpeed }, [playbackSpeed])
@@ -44,12 +48,58 @@ export default function PlaybackBar() {
       const totalProgress = elapsed / msPerTick
       const advance       = Math.floor(totalProgress)
       const subProgress   = totalProgress - advance
+
+      // Diagnostics: playback hitch/jank visibility while preloading/cacheing.
+      // Avoid noise at high speed: log only severe stalls.
+      const severeElapsed = elapsed > 120
+      const severeAdvance = advance > Math.max(24, Math.round(speedRef.current * 3))
+      if (severeElapsed || severeAdvance) {
+        const sinceLast = now - lastJankLogRef.current
+        if (sinceLast > 2000) {
+          lastJankLogRef.current = now
+          window.electronAPI.debugLog('playback.jank', {
+            elapsedMs: Math.round(elapsed),
+            advancedTicks: advance,
+            speed: speedRef.current,
+            reason: severeElapsed ? 'elapsed' : 'advance',
+            currentTick: ticks[tickIdxRef.current] ?? null,
+            tickCount: ticks.length,
+          }).catch(() => {})
+        }
+      }
+
       if (advance > 0) {
         lastTimeRef.current += advance * msPerTick
         tickIdxRef.current   = Math.min(tickIdxRef.current + advance, ticks.length - 1)
         if (tickIdxRef.current >= ticks.length - 1) {
-          usePlaybackStore.setState({ currentTick: ticks[ticks.length - 1], tickProgress: 0, isPlaying: false })
-          isPlayingRef.current = false
+          const currentRound = usePlaybackStore.getState().currentRound
+          const playableRounds = rounds.filter((r) => !r.is_knife && r.round_num > 0).map((r) => r.round_num).sort((a, b) => a - b)
+          const currentIdx = playableRounds.findIndex((r) => r === currentRound)
+          const nextRound = currentIdx >= 0 ? playableRounds[currentIdx + 1] : undefined
+
+          if (selectedDemo && typeof nextRound === 'number') {
+            window.electronAPI.debugLog('round.auto_advance', {
+              demoId: selectedDemo.id,
+              fromRound: currentRound,
+              toRound: nextRound,
+              atTick: ticks[ticks.length - 1],
+            }).catch(() => {})
+
+            usePlaybackStore.setState({ currentRound: nextRound, tickProgress: 0, isPlaying: true })
+            loadRoundData(selectedDemo.id, nextRound).catch((error) => {
+              window.electronAPI.debugLog('round.auto_advance.error', {
+                demoId: selectedDemo.id,
+                fromRound: currentRound,
+                toRound: nextRound,
+                error: error instanceof Error ? error.message : String(error),
+              }).catch(() => {})
+              usePlaybackStore.setState({ isPlaying: false })
+              isPlayingRef.current = false
+            })
+          } else {
+            usePlaybackStore.setState({ currentTick: ticks[ticks.length - 1], tickProgress: 0, isPlaying: false })
+            isPlayingRef.current = false
+          }
           return
         }
       }
@@ -58,7 +108,7 @@ export default function PlaybackBar() {
     }
     rafRef.current = requestAnimationFrame(animate)
     return () => { isPlayingRef.current = false; if (rafRef.current) cancelAnimationFrame(rafRef.current) }
-  }, [isPlaying, playbackSpeed])
+  }, [isPlaying, playbackSpeed, rounds, selectedDemo])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
