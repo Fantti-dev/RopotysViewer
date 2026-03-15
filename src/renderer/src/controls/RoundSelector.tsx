@@ -1,32 +1,40 @@
 import { useDemoStore, usePlaybackStore } from '../stores'
+import { getCachedRound, setCachedRound } from '../roundCache'
+
+export const KNIFE_ROUND = -1  // varattu myöhempää käyttöä varten
 
 export async function loadRoundData(demoId: number, roundNum: number) {
-  const [positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots] = await Promise.all([
-    window.electronAPI.getPositions(demoId, roundNum),
-    window.electronAPI.getKills(demoId, roundNum),
-    window.electronAPI.getGrenades(demoId, roundNum),
-    window.electronAPI.getGrenadeTrajectories(demoId, roundNum),
-    window.electronAPI.getSmokeEffects(demoId, roundNum),
-    window.electronAPI.getBombEvents(demoId, roundNum),
-    window.electronAPI.getFlashEvents(demoId, roundNum),
-    window.electronAPI.getInfernoFires(demoId, roundNum),
-    window.electronAPI.getShotsFired(demoId, roundNum),
-  ])
+  const t0 = performance.now()
+  const rounds = useDemoStore.getState().rounds
 
-  console.log(`[loadRoundData] round=${roundNum} pos=${positions.length} kills=${kills.length} grenades=${grenades.length} smokes=${smokes.length} bomb=${bomb.length} flash=${flash.length} traj=${trajectories.length} infernoFires=${infernoFires.length} shots=${shots.length}`)
+  const cached = getCachedRound(demoId, roundNum)
+  if (cached) {
+    applyRoundData(cached)
+    console.log(`[loadRound] cache hit round=${roundNum} ${(performance.now()-t0).toFixed(1)}ms`)
+    return
+  }
 
-  const ticks = [...new Set(positions.map((p: any) => p.tick))].sort((a: any, b: any) => a - b)
+  const raw = await window.electronAPI.loadRoundAll(demoId, roundNum)
+  const roundInfo = rounds.find(r => r.round_num === roundNum)
+  setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick)
+  applyRoundData(getCachedRound(demoId, roundNum)!)
+  console.log(`[loadRound] IPC valmis round=${roundNum} ${(performance.now()-t0).toFixed(0)}ms`)
+}
+
+function applyRoundData(data: ReturnType<typeof getCachedRound>) {
+  if (!data) return
   const store = usePlaybackStore.getState()
-  store.setAllTicks(ticks as number[])
-  store.setPositions(positions)
-  store.setKills(kills)
-  store.setGrenades(grenades)
-  store.setGrenadeTrajectories(trajectories)
-  store.setSmokeEffects(smokes)
-  store.setBombEvents(bomb)
-  store.setFlashEvents(flash)
-  store.setInfernoFires(infernoFires)
-  store.setShots(shots)
+  store.setAllTicks(data.ticks)
+  store.setPositions(data.positions)
+  store.setKills(data.kills)
+  store.setGrenades(data.grenades)
+  store.setGrenadeTrajectories(data.trajectories)
+  store.setSmokeEffects(data.smokes)
+  store.setBombEvents(data.bomb)
+  store.setFlashEvents(data.flash)
+  store.setInfernoFires(data.infernoFires)
+  store.setShots(data.shots)
+  store.setDamage(data.damage)
   store.setPlaying(false)
 }
 
@@ -34,33 +42,71 @@ export default function RoundSelector() {
   const { selectedDemo, rounds } = useDemoStore()
   const { currentRound, setRound } = usePlaybackStore()
 
-  const handleClick = async (roundNum: number) => {
+  const handleClick = (roundNum: number) => {
     if (!selectedDemo) return
+    usePlaybackStore.getState().setPlaying(false)
     setRound(roundNum)
-    await loadRoundData(selectedDemo.id, roundNum)
+    loadRoundData(selectedDemo.id, roundNum)
   }
 
-  if (!selectedDemo) return <span className="text-xs text-gray-500">Valitse demo</span>
+  if (!selectedDemo) return null
+
+  const half1   = rounds.filter(r => !r.is_knife && r.round_num <= 12)
+  const half2   = rounds.filter(r => !r.is_knife && r.round_num >= 13 && r.round_num <= 24)
+  const ot      = rounds.filter(r => !r.is_knife && r.round_num >= 25)
+  const knifes  = rounds.filter(r => r.is_knife)
+
+  const RBtn = ({ r }: { r: typeof rounds[0] }) => {
+    const active   = currentRound === r.round_num
+    const won      = r.winner_team
+    const isKnife  = r.is_knife
+    return (
+      <button
+        key={r.round_num}
+        onClick={() => handleClick(r.round_num)}
+        title={isKnife ? `Erä ${r.round_num}: Puukkokierros 🔪` : `Erä ${r.round_num}: ${won ?? '?'} voitti`}
+        style={{
+          width:26, height:26, borderRadius:8,
+          fontSize: isKnife ? 13 : 11, fontWeight: active ? 700 : 500,
+          cursor:'pointer', transition:'all .12s',
+          transform: active ? 'scale(1.1)' : 'scale(1)',
+          background: active    ? '#f97316'
+            : isKnife           ? 'rgba(251,191,36,0.12)'
+            : won === 'CT'      ? 'rgba(91,156,246,0.15)'
+            : won === 'T'       ? 'rgba(249,115,22,0.15)'
+            : 'rgba(255,255,255,0.04)',
+          color: active         ? '#fff'
+            : isKnife           ? '#fbbf24'
+            : won === 'CT'      ? '#5b9cf6'
+            : won === 'T'       ? '#f97316'
+            : '#6b7280',
+          border: active        ? '1px solid #f97316'
+            : isKnife           ? '1px solid rgba(251,191,36,0.3)'
+            : won === 'CT'      ? '1px solid rgba(91,156,246,0.25)'
+            : won === 'T'       ? '1px solid rgba(249,115,22,0.25)'
+            : '1px solid transparent',
+        }}
+      >
+        {isKnife ? '🔪' : r.round_num}
+      </button>
+    )
+  }
 
   return (
-    <div className="flex items-center gap-1 flex-wrap">
-      <span className="text-xs text-gray-400 mr-1">Round:</span>
-      {rounds.map(r => (
-        <button key={r.round_num} onClick={() => handleClick(r.round_num)}
-          className={`w-7 h-6 text-xs rounded font-mono transition-colors ${
-            currentRound === r.round_num
-              ? 'bg-cs-accent text-black font-bold'
-              : r.winner_team === 'CT'
-                ? 'text-cs-ct hover:bg-cs-ct/20'
-                : r.winner_team === 'T'
-                  ? 'text-cs-t hover:bg-cs-t/20'
-                  : 'text-gray-400 hover:bg-white/10'
-          }`}
-          title={`Round ${r.round_num}: ${r.winner_team ?? '?'} voitti (${r.win_reason ?? '?'})`}>
-          {r.round_num}
-        </button>
-      ))}
-      <span className="text-xs text-gray-500 ml-2">{selectedDemo.map_name}</span>
+    <div style={{ display:'flex', alignItems:'center', gap:2, flexWrap:'wrap' }}>
+      {knifes.length > 0 && <>
+        {knifes.map(r => <RBtn key={r.round_num} r={r} />)}
+        <div style={{ width:1, height:16, background:'#1e2130', margin:'0 2px' }}/>
+      </>}
+      {half1.map(r => <RBtn key={r.round_num} r={r} />)}
+      {half2.length > 0 && <>
+        <div style={{ width:1, height:16, background:'#1e2130', margin:'0 2px' }}/>
+        {half2.map(r => <RBtn key={r.round_num} r={r} />)}
+      </>}
+      {ot.length > 0 && <>
+        <div style={{ width:1, height:16, background:'#1e2130', margin:'0 2px' }}/>
+        {ot.map(r => <RBtn key={r.round_num} r={r} />)}
+      </>}
     </div>
   )
 }

@@ -4,13 +4,22 @@ import { resolve } from 'path'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      target: 'node18',
+    }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      target: 'node18',
+    }
   },
   renderer: {
     publicDir: resolve(__dirname, 'maps'),
+    build: {
+      target: 'chrome108',
+    },
     plugins: [react()],
     resolve: {
       alias: {

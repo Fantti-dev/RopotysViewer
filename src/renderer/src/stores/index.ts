@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Demo, Round, Player, Position, Kill, Grenade, BombEvent, SmokeEffect, GrenadeTrajectoryPoint, FlashEvent, InfernoFirePoint, Shot } from '../types'
+import type { Demo, Round, Player, Position, Kill, Grenade, BombEvent, SmokeEffect, GrenadeTrajectoryPoint, FlashEvent, InfernoFirePoint, Shot, DamageEvent } from '../types'
 
 // ── Demo store ─────────────────────────────────────────────────────────────────
 interface DemoState {
@@ -9,6 +9,9 @@ interface DemoState {
   players: Player[]
   isLoading: boolean
   parseProgress: string[]
+  preloadTotal: number
+  preloadDone: number
+  preloadActive: boolean
   setDemos: (d: Demo[]) => void
   setSelectedDemo: (d: Demo | null) => void
   setRounds: (r: Round[]) => void
@@ -16,6 +19,7 @@ interface DemoState {
   setLoading: (v: boolean) => void
   addParseProgress: (msg: string) => void
   clearParseProgress: () => void
+  setPreload: (total: number, done: number, active: boolean) => void
   refreshDemos: () => Promise<void>
 }
 
@@ -26,6 +30,9 @@ export const useDemoStore = create<DemoState>((set) => ({
   players: [],
   isLoading: false,
   parseProgress: [],
+  preloadTotal: 0,
+  preloadDone: 0,
+  preloadActive: false,
   setDemos: (demos) => set({ demos }),
   setSelectedDemo: (selectedDemo) => set({ selectedDemo }),
   setRounds: (rounds) => set({ rounds }),
@@ -33,6 +40,7 @@ export const useDemoStore = create<DemoState>((set) => ({
   setLoading: (isLoading) => set({ isLoading }),
   addParseProgress: (msg) => set((s) => ({ parseProgress: [...s.parseProgress.slice(-50), msg] })),
   clearParseProgress: () => set({ parseProgress: [] }),
+  setPreload: (preloadTotal, preloadDone, preloadActive) => set({ preloadTotal, preloadDone, preloadActive }),
   refreshDemos: async () => {
     const demos = await window.electronAPI.getDemos()
     set({ demos })
@@ -54,6 +62,7 @@ interface PlaybackState {
   flashEvents: FlashEvent[]
   infernoFires: InfernoFirePoint[]
   shots: Shot[]
+  damage: DamageEvent[]
   isPlaying: boolean
   playbackSpeed: number
   setRound: (round: number) => void
@@ -68,6 +77,7 @@ interface PlaybackState {
   setFlashEvents: (f: FlashEvent[]) => void
   setInfernoFires: (i: InfernoFirePoint[]) => void
   setShots: (s: Shot[]) => void
+  setDamage: (d: DamageEvent[]) => void
   setPlaying: (v: boolean) => void
   setSpeed: (s: number) => void
 }
@@ -86,6 +96,7 @@ export const usePlaybackStore = create<PlaybackState>((set) => ({
   flashEvents: [],
   infernoFires: [],
   shots: [],
+  damage: [],
   isPlaying: false,
   playbackSpeed: 1,
 
@@ -101,6 +112,7 @@ export const usePlaybackStore = create<PlaybackState>((set) => ({
   setFlashEvents:        (flashEvents)           => set({ flashEvents }),
   setInfernoFires:       (infernoFires)          => set({ infernoFires }),
   setShots:              (shots)                 => set({ shots }),
+  setDamage:             (damage)               => set({ damage }),
   setPlaying:            (isPlaying)             => set({ isPlaying }),
   setSpeed:              (playbackSpeed)         => set({ playbackSpeed }),
 }))
@@ -136,4 +148,14 @@ export const useLayerStore = create<LayerState>((setState) => ({
   lowerLayer:   false,
   toggle: (layer) => setState((s) => ({ [layer]: !s[layer] } as any)),
   set:    (layer, value) => setState({ [layer]: value } as any),
+}))
+
+// ── Valittu pelaaja — POV-seuranta ────────────────────────────────────────────
+interface SelectedPlayerState {
+  steamId: string | null
+  setSteamId: (id: string | null) => void
+}
+export const useSelectedPlayerStore = create<SelectedPlayerState>((set) => ({
+  steamId: null,
+  setSteamId: (steamId) => set({ steamId }),
 }))

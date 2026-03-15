@@ -67,6 +67,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getShotsFired: (demoId: number, roundNum: number) =>
     ipcRenderer.invoke('data:getShotsFired', demoId, roundNum),
 
+  // ── Kaikki round-data yhdellä kutsulla (cache) ─────────────────────────────
+  loadRoundAll: (demoId: number, roundNum: number) =>
+    ipcRenderer.invoke('data:loadRoundAll', demoId, roundNum),
+
+  getCumulativeStats: (demoId: number, upToRound: number) =>
+    ipcRenderer.invoke('data:getCumulativeStats', demoId, upToRound),
+
+  // ── Lataa kaikki kierrokset taustalla ──────────────────────────────────────
+  preloadAllRounds: (demoId: number, roundNums: number[]) =>
+    ipcRenderer.invoke('data:preloadAllRounds', demoId, roundNums),
+
+  onPreloadProgress: (cb: (data: { done: number; total: number; roundNum: number | null; complete?: boolean }) => void) => {
+    ipcRenderer.on('preload:progress', (_event, data) => cb(data))
+    return () => ipcRenderer.removeAllListeners('preload:progress')
+  },
+
   // ── Heatmap (kaikki roundit) ───────────────────────────────────────────────
   getHeatmapPositions: (demoId: number, steamId?: string) =>
     ipcRenderer.invoke('data:getHeatmapPositions', demoId, steamId),

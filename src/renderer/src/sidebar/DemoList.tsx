@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useDemoStore, usePlaybackStore } from '../stores'
 import { loadRoundData } from '../controls/RoundSelector'
+import { clearCache } from '../roundCache'
 
 export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
   const {
     demos, selectedDemo, setSelectedDemo,
     setPlayers, setRounds, isLoading, setLoading,
     parseProgress, addParseProgress, clearParseProgress,
+    preloadTotal, preloadDone, preloadActive, setPreload,
     refreshDemos
   } = useDemoStore()
 
@@ -51,6 +53,7 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
   const handleSelectDemo = async (demo: typeof demos[0]) => {
     setSelectedDemo(demo)
     setLoading(true)
+    clearCache()  // Tyhjennä vanha demo pois
     try {
       const [players, rounds] = await Promise.all([
         window.electronAPI.getPlayers(demo.id),
@@ -58,12 +61,28 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
       ])
       setPlayers(players)
       setRounds(rounds)
-      // Käytä ensimmäistä oikeaa round-numeroa (voi olla 0 tai 1)
+
       const firstRound = rounds.length > 0 ? rounds[0].round_num : 0
       setRound(firstRound)
+
+      // Lataa ensimmäinen kierros heti
       await loadRoundData(demo.id, firstRound)
       onSelect?.()
-    } finally {
+      setLoading(false)
+
+      // Preload kaikki muut kierrokset taustalla — tallennetaan suoraan renderer-cacheen
+      const allRoundNums = rounds.map((r: any) => r.round_num)
+      setPreload(allRoundNums.length, 1, true)
+
+      const unsub = window.electronAPI.onPreloadProgress(({ done, total, complete }) => {
+        setPreload(total, done, !complete)
+        if (complete) unsub()
+      })
+
+      window.electronAPI.preloadAllRounds(demo.id, allRoundNums)
+        .catch(() => { setPreload(0, 0, false) })
+
+    } catch(e) {
       setLoading(false)
     }
   }

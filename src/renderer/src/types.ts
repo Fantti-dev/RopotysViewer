@@ -21,6 +21,19 @@ declare global {
       getSmokeEffects: (demoId: number, roundNum: number) => Promise<SmokeEffect[]>
       getBombEvents: (demoId: number, roundNum: number) => Promise<BombEvent[]>
       getShotsFired: (demoId: number, roundNum: number) => Promise<Shot[]>
+      loadRoundAll:  (demoId: number, roundNum: number) => Promise<{
+        positions:    Position[]
+        kills:        Kill[]
+        grenades:     Grenade[]
+        trajectories: GrenadeTrajectoryPoint[]
+        smokes:       SmokeEffect[]
+        bomb:         BombEvent[]
+        flash:        FlashEvent[]
+        infernoFires: InfernoFirePoint[]
+        shots:        Shot[]
+      }>
+      preloadAllRounds: (demoId: number, roundNums: number[]) => Promise<{ done: number; total: number }>
+      onPreloadProgress: (cb: (data: { done: number; total: number; roundNum: number | null; complete?: boolean; data?: any }) => void) => () => void
       getFlashEvents: (demoId: number, roundNum: number) => Promise<FlashEvent[]>
       getHeatmapPositions: (demoId: number, steamId?: string) => Promise<HeatmapPoint[]>
 
@@ -55,6 +68,7 @@ export interface Round {
   ct_score: number
   kill_count: number
   start_tick: number
+  is_knife: boolean
 }
 
 export interface Player {

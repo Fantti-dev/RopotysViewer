@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import * as PIXI from 'pixi.js'
-import { useDemoStore, usePlaybackStore, useLayerStore } from '../stores'
+import { useDemoStore, usePlaybackStore, useLayerStore, useSelectedPlayerStore } from '../stores'
+import { useAlignStore } from './alignStore'
 import { getMapConfig, worldToPixel, isOnLowerLayer } from './mapUtils'
 import KillFeed from './KillFeed'
 import type { Position } from '../types'
@@ -46,6 +47,8 @@ export default function MapCanvas() {
     currentTick, allTicks, currentRound, tickProgress,
   } = usePlaybackStore()
   const L = useLayerStore()
+  const align = useAlignStore()
+  const { steamId: povSteamId } = useSelectedPlayerStore()
 
   // Rebuild team lookup when players change
   useEffect(() => {
@@ -57,6 +60,8 @@ export default function MapCanvas() {
   // ── Pixi init ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return
+    const container = containerRef.current
+
     const app = new PIXI.Application({
       width: CANVAS_SIZE, height: CANVAS_SIZE,
       backgroundColor: 0x111111,
@@ -64,9 +69,24 @@ export default function MapCanvas() {
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
     })
-    containerRef.current.innerHTML = ''
-    containerRef.current.appendChild(app.view as HTMLCanvasElement)
+    container.innerHTML = ''
+    container.appendChild(app.view as HTMLCanvasElement)
     appRef.current = app
+
+    // Pakota canvas täyttämään kontti CSS:llä
+    const canvas = app.view as HTMLCanvasElement
+    canvas.style.width  = '100%'
+    canvas.style.height = '100%'
+    canvas.style.display = 'block'
+
+    // ResizeObserver — päivitä Pixi-renderer kun kontti muuttuu
+    const ro = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect
+      if (width > 0 && height > 0) {
+        app.renderer.resize(width, height)
+      }
+    })
+    ro.observe(container)
 
     // Layers in draw order (back → front)
     const names = ['map','trails','smokes','grenades','bomb','kills','shots','players','labels','timers']
@@ -99,7 +119,7 @@ export default function MapCanvas() {
     app.stage.on('pointerup',      () => { drag = false })
     app.stage.on('pointerupoutside',() => { drag = false })
 
-    return () => { app.destroy(true); appRef.current = null }
+    return () => { ro.disconnect(); app.destroy(true); appRef.current = null }
   }, [])
 
   // ── Load map image ──────────────────────────────────────────────────────────
@@ -112,6 +132,15 @@ export default function MapCanvas() {
       const s = new PIXI.Sprite(tex)
       s.width = CANVAS_SIZE; s.height = CANVAS_SIZE
       layer.addChild(s)
+
+      // Skaalaa kartta ruutuun automaattisesti
+      const app = appRef.current!
+      const vw = app.renderer.width
+      const vh = app.renderer.height
+      const fit = Math.min(vw / CANVAS_SIZE, vh / CANVAS_SIZE)
+      app.stage.scale.set(fit)
+      app.stage.x = (vw - CANVAS_SIZE * fit) / 2
+      app.stage.y = (vh - CANVAS_SIZE * fit) / 2
     }).catch(() => {
       const g = new PIXI.Graphics()
       g.beginFill(0x1a2030).drawRect(0, 0, CANVAS_SIZE, CANVAS_SIZE).endFill()
@@ -677,10 +706,61 @@ export default function MapCanvas() {
   }, [currentTick, tickProgress, currentRound, L, selectedDemo, positions, kills, grenades,
       grenadeTrajectories, smokeEffects, bombEvents, flashEvents, infernoFires, shots, allTicks, players])
 
+  // ── POV-seuranta — keskitä kartta valitun pelaajan ympärille ──────────────
+  useEffect(() => {
+    if (!povSteamId || !appRef.current || !selectedDemo) return
+    const cfg = getMapConfig(selectedDemo.map_name)
+    if (!cfg) return
+    const pos = positions.find(p => String(p.steam_id) === povSteamId && p.tick === currentTick)
+    if (!pos || !pos.is_alive) return
+
+    const app = appRef.current
+    const px  = worldToPixel(pos.x, pos.y, cfg, CANVAS_SIZE, false)
+    const stageScale = app.stage.scale.x
+    const viewW = app.renderer.width  / stageScale
+    const viewH = app.renderer.height / stageScale
+
+    // Pehmeä liike: aseta stage siten että pelaaja on ruudun keskellä
+    const targetX = app.renderer.width  / 2 - px.x * stageScale
+    const targetY = app.renderer.height / 2 - px.y * stageScale
+    app.stage.x += (targetX - app.stage.x) * 0.2
+    app.stage.y += (targetY - app.stage.y) * 0.2
+  }, [currentTick, povSteamId, positions, selectedDemo])
+
   return (
-    <div className="w-full h-full overflow-hidden relative cursor-grab active:cursor-grabbing">
+    <div
+      className="w-full h-full overflow-hidden relative cursor-grab active:cursor-grabbing"
+      onClick={e => {
+        if (!align.active || !appRef.current || !selectedDemo) return
+        const cfg = getMapConfig(selectedDemo.map_name)
+        if (!cfg) return
+        // Muunna klikkaus → canvas-koordinaatit PIXI-stagella
+        const rect    = (appRef.current.view as HTMLCanvasElement).getBoundingClientRect()
+        const viewX   = (e.clientX - rect.left)  * (CANVAS_SIZE / rect.width)
+        const viewY   = (e.clientY - rect.top)   * (CANVAS_SIZE / rect.height)
+        // Kumoa stage pan/zoom → canvas-space
+        const stage   = appRef.current.stage
+        const canvasX = (viewX - stage.x) / stage.scale.x
+        const canvasY = (viewY - stage.y) / stage.scale.y
+        // Käänteinen worldToPixel:
+        // px = (wx - posX) / scale * (CANVAS_SIZE/1024)  →  wx = px / (CANVAS_SIZE/1024) * scale + posX
+        const factor = CANVAS_SIZE / 1024
+        const cs2x   = canvasX / factor * cfg.scale + cfg.posX
+        const cs2y   = canvasY / factor * cfg.scale + cfg.posY
+        align.set2DPoint(cs2x, cs2y)
+      }}
+      style={{ cursor: align.active ? 'crosshair' : undefined }}
+    >
       <div ref={containerRef} className="w-full h-full" />
       <KillFeed />
+      {align.active && (
+        <div style={{ position:'absolute', top:8, left:'50%', transform:'translateX(-50%)',
+          background:'rgba(251,191,36,0.9)', color:'#000', fontSize:11, fontWeight:700,
+          padding:'4px 12px', borderRadius:20, pointerEvents:'none', whiteSpace:'nowrap' }}>
+          📍 Klikkaa 2D-kartalta piste {align.nextSlot + 1}/2
+          {align.points[0].has2D && !align.points[0].has3D && ' → klikkaa nyt 3D-mallilta sama piste'}
+        </div>
+      )}
     </div>
   )
 }

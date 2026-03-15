@@ -155,11 +155,37 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
 
         import numpy as np
 
-        # Käytä demoparser2:n round-kenttää — se on luotettava
-        # Ota per round vain pienin tick (ensimmäinen round_start)
         rs_sorted = round_starts.sort_values("tick").reset_index(drop=True)
-        # Ensimmäinen tick per round-numero = roundin alkutick
+
+        # Normaali: ensimmäinen round_start per round
         rs_first = rs_sorted.groupby("round", sort=True)["tick"].min().reset_index()
+
+        # Round 1 erityistapaus: käytä VIIMEISTÄ round_start-eventtiä
+        # (FACEIT: lämmittely/puukko aiheuttaa useita round_start-eventtejä round 1:ssä)
+        round1_starts = rs_sorted[rs_sorted["round"] == 1]["tick"]
+        if len(round1_starts) > 1:
+            real_round1_start = int(round1_starts.max())
+            rs_first.loc[rs_first["round"] == 1, "tick"] = real_round1_start
+            log(f"    Round 1: useita round_start-eventtejä, käytetään viimeistä tick={real_round1_start}")
+
+        # ── FACEIT knife round tunnistus ──────────────────────────────────────
+        # round_announce_match_start #1 = puukon alku → round 0
+        knife_start_tick = None
+        match_start_tick = None
+        try:
+            match_start_df = parser.parse_event("round_announce_match_start")
+            if not match_start_df.empty:
+                all_ticks = sorted([int(t) for t in match_start_df["tick"].tolist()])
+                log(f"    round_announce_match_start eventit: {all_ticks}")
+                cursor.execute("IF COL_LENGTH('demos','match_start_tick') IS NULL ALTER TABLE demos ADD match_start_tick INT NULL")
+                cursor.execute("IF COL_LENGTH('rounds','is_knife') IS NULL ALTER TABLE rounds ADD is_knife BIT NOT NULL DEFAULT 0")
+                knife_start_tick = all_ticks[0]
+                match_start_tick = all_ticks[0]
+                cursor.execute("UPDATE demos SET match_start_tick=? WHERE id=?", match_start_tick, demo_id)
+                conn.commit()
+        except Exception as e:
+            log(f"    [VAROITUS] round_announce_match_start: {e}")
+
         rs_first = rs_first.sort_values("tick").reset_index(drop=True)
         start_ticks      = rs_first["tick"].values
         start_round_nums = rs_first["round"].values
@@ -207,6 +233,17 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
         conn.commit()
         log(f"    Roundit: {len(inserted_rounds)}, start_ticks: {list(start_ticks[:5])}...")
         log(f"    round_start_tick_map: {dict(list(round_start_tick_map.items())[:6])}")
+
+        # ── Round 0: puukkokierros ────────────────────────────────────────────
+        if knife_start_tick is not None:
+            cursor.execute("""
+                IF NOT EXISTS (SELECT 1 FROM rounds WHERE demo_id=? AND round_num=0)
+                INSERT INTO rounds (demo_id, round_num, winner_team, win_reason, round_type, t_score, ct_score, start_tick, is_knife)
+                VALUES (?, 0, NULL, NULL, 'unknown', 0, 0, ?, 1)
+            """, demo_id, demo_id, knife_start_tick)
+            cursor.execute("UPDATE rounds SET is_knife=0 WHERE demo_id=? AND round_num > 0", demo_id)
+            conn.commit()
+            log(f"    Round 0 (puukko) start_tick={knife_start_tick}, round 1 start_tick={match_start_tick}")
     except Exception as e:
         log(f"    [VAROITUS] Roundiparsinta: {e}")
         import traceback; log(traceback.format_exc())

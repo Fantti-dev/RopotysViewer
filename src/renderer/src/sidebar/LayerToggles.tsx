@@ -6,11 +6,11 @@ const LAYERS = [
   { key: 'playerLabels',  label: 'Nimet / HP',   color: '#94a3b8' },
   { key: 'kills',         label: 'Tapot',        color: '#ef4444' },
   { key: 'killLines',     label: 'Tappolinjat',  color: '#ef4444' },
-  { key: 'grenades',      label: 'Granaatit',    color: '#f59e0b' },
+  { key: 'grenades',      label: 'Kranaatit',    color: '#f59e0b' },
   { key: 'smokes',        label: 'Savut',        color: '#9ca3af' },
   { key: 'bomb',          label: 'Pommi',        color: '#f97316' },
   { key: 'shots',         label: 'Laukaukset',   color: '#fcd34d' },
-  { key: 'heatmap',       label: 'Heatmap',      color: '#f87171' },
+  { key: 'heatmap',       label: 'Lämpökartta',  color: '#f87171' },
 ] as const
 
 export default function LayerToggles() {

@@ -5,16 +5,18 @@ const KILL_FEED_TICKS = 384
 const WEAPON_FI: Record<string, string> = {
   ak47:'AK-47', aug:'AUG', awp:'AWP', bizon:'PP-Bizon', cz75a:'CZ75',
   deagle:'Deagle', famas:'FAMAS', fiveseven:'Five-7', g3sg1:'G3SG1',
-  galil:'Galil', galilar:'Galil', glock:'Glock', hegrenade:'HE-kranaatti',
-  flashbang:'Sokaisija', incgrenade:'Polttokranaatti', molotov:'Molotov',
-  smokegrenade:'Savukranaatti', m249:'M249', m4a1:'M4A1',
-  m4a1_silencer:'M4A1-S', m4a4:'M4A4', mac10:'MAC-10', mag7:'MAG-7',
-  mp5sd:'MP5-SD', mp7:'MP7', mp9:'MP9', negev:'Negev', nova:'Nova',
-  p2000:'P2000', p250:'P250', p90:'P90', revolver:'R8', sawedoff:'Sawed-Off',
-  scar20:'SCAR-20', sg553:'SG 553', sg556:'SG 553', ssg08:'SSG 08',
-  tec9:'Tec-9', ump45:'UMP-45', usp_silencer:'USP-S', xm1014:'XM1014',
-  zeus:'Zeus', knife:'Veitsi', knife_t:'Veitsi', c4:'Pommi', planted_c4:'Pommi',
-  world:'Putoaminen',
+  galil:'Galil', galilar:'Galil', glock:'Glock-18',
+  hegrenade:'HE-kranaatti', flashbang:'Sokaisukranaatti',
+  incgrenade:'Polttokranaatti', molotov:'Molotovin cocktail',
+  smokegrenade:'Savukranaatti', decoy:'Harhautuskranaatti',
+  m249:'M249', m4a1:'M4A1', m4a1_silencer:'M4A1-S', m4a4:'M4A4',
+  mac10:'MAC-10', mag7:'MAG-7', mp5sd:'MP5-SD', mp7:'MP7', mp9:'MP9',
+  negev:'Negev', nova:'Nova', p2000:'P2000', p250:'P250', p90:'P90',
+  revolver:'R8', sawedoff:'Sawed-Off', scar20:'SCAR-20',
+  sg553:'SG 553', sg556:'SG 553', ssg08:'SSG 08', tec9:'Tec-9',
+  ump45:'UMP-45', usp_silencer:'USP-S', xm1014:'XM1014',
+  zeus:'Zeus', knife:'Veitsi', knife_t:'Veitsi',
+  c4:'Pommi', planted_c4:'Pommi', world:'Putoaminen',
 }
 
 function weaponLabel(raw: string | null | undefined): string {
