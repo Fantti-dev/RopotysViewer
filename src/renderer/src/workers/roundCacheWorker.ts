@@ -51,17 +51,32 @@ function buildCachedRound(raw: any, startTick?: number): RoundData {
     ticks.sort((a, b) => a - b)
   }
 
+  const tickSet = new Set<number>(ticks)
+  const addTick = (value: unknown) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return
+    tickSet.add(value)
+  }
+  ;(raw.kills ?? []).forEach((k: any) => addTick(k?.tick))
+  ;(raw.damage ?? []).forEach((d: any) => addTick(d?.tick))
+  ;(raw.shots ?? []).forEach((s: any) => addTick(s?.tick))
+  ;(raw.flash ?? []).forEach((f: any) => addTick(f?.tick))
+  ;(raw.bomb ?? []).forEach((b: any) => addTick(b?.tick))
+  ;(raw.smokes ?? []).forEach((s: any) => { addTick(s?.start_tick); addTick(s?.end_tick) })
+  ;(raw.grenades ?? []).forEach((g: any) => { addTick(g?.tick_thrown); addTick(g?.tick_detonated) })
+
+  const mergedTicks = Array.from(tickSet).sort((a, b) => a - b)
+
   return {
-    ticks,
+    ticks: mergedTicks,
     positions,
-    kills: raw.kills,
-    grenades: raw.grenades,
-    trajectories: raw.trajectories,
-    smokes: raw.smokes,
-    bomb: raw.bomb,
-    flash: raw.flash,
-    infernoFires: raw.infernoFires,
-    shots: raw.shots,
+    kills: raw.kills ?? [],
+    grenades: raw.grenades ?? [],
+    trajectories: raw.trajectories ?? [],
+    smokes: raw.smokes ?? [],
+    bomb: raw.bomb ?? [],
+    flash: raw.flash ?? [],
+    infernoFires: raw.infernoFires ?? [],
+    shots: raw.shots ?? [],
     damage: raw.damage ?? []
   }
 }
