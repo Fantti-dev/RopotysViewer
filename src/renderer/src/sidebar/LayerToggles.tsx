@@ -1,4 +1,5 @@
-import { useLayerStore } from '../stores'
+import { useDemoStore, useLayerStore, usePlaybackStore } from '../stores'
+import { loadRoundData } from '../controls/RoundSelector'
 
 const LAYERS = [
   { key: 'players',       label: 'Pelaajat',     color: '#5b9cf6' },
@@ -15,6 +16,8 @@ const LAYERS = [
 
 export default function LayerToggles() {
   const store = useLayerStore()
+  const { selectedDemo } = useDemoStore()
+  const { currentRound } = usePlaybackStore()
 
   return (
     <div style={{ padding:'8px 0' }}>
@@ -29,7 +32,12 @@ export default function LayerToggles() {
         return (
           <button
             key={key}
-            onClick={() => store.toggle(key)}
+            onClick={() => {
+              store.toggle(key)
+              if (selectedDemo) {
+                loadRoundData(selectedDemo.id, currentRound)
+              }
+            }}
             style={{
               width:'100%', display:'flex', alignItems:'center',
               gap:10, padding:'6px 14px',
