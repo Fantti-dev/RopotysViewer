@@ -22,10 +22,10 @@ function optionsVariant(options: ReturnType<typeof getRoundLoadOptions>) {
 }
 
 const FULL_PRELOAD_OPTIONS = {
-  includeKills: true,
-  includeSmokes: true,
-  includeBomb: true,
-  includeShots: true,
+  includeKills: false,
+  includeSmokes: false,
+  includeBomb: false,
+  includeShots: false,
 }
 
 const FULL_PRELOAD_VARIANT = optionsVariant(FULL_PRELOAD_OPTIONS)

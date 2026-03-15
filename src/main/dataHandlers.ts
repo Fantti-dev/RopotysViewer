@@ -504,6 +504,7 @@ export function registerDataHandlers() {
           JOIN rounds r   ON r.demo_id=fe.demo_id AND r.round_num=fe.round_num
           WHERE fe.demo_id=@demoId AND fe.round_num < @upToRound
             AND pt.team_start <> pb.team_start AND ISNULL(r.is_knife,0)=0
+            AND ISNULL(fe.match_quality,'unmatched') IN ('detonation_window','entity_tick','exact_handle','spatial_strict')
           GROUP BY fe.thrower_steam_id
         `),
     ])

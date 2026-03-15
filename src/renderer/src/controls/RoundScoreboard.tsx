@@ -122,6 +122,9 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
       })
 
       flashEvents.filter(f => f.tick <= currentTick).forEach(f => {
+        if (f.match_quality && f.match_quality === "unmatched") return
+        if (!f.thrower_steam_id) return
+
         const throwerId = String(f.thrower_steam_id)
         const thrower = map.get(throwerId)
         const blinded = map.get(String(f.blinded_steam_id))

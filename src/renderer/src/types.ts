@@ -152,7 +152,7 @@ export interface Grenade {
   round_num: number
   tick_thrown: number
   tick_detonated: number | null
-  thrower_steam_id: string
+  thrower_steam_id: string | null
   grenade_type: GrenadeType
   throw_x: number
   throw_y: number
@@ -160,7 +160,7 @@ export interface Grenade {
   detonate_x: number | null
   detonate_y: number | null
   detonate_z: number | null
-  thrower_name: string
+  thrower_name: string | null
 }
 
 export interface GrenadeTrajectoryPoint {
@@ -222,11 +222,12 @@ export interface FlashEvent {
   demo_id: number
   round_num: number
   tick: number
-  thrower_steam_id: string
+  thrower_steam_id: string | null
   blinded_steam_id: string
   flash_duration: number
-  thrower_name: string
-  blinded_name: string
+  match_quality?: string | null
+  thrower_name: string | null
+  blinded_name: string | null
 }
 
 // ── Karttakonfiguraatio ───────────────────────────────────────────────────────
