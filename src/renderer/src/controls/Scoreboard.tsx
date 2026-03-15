@@ -1,8 +1,8 @@
 import { useDemoStore, usePlaybackStore } from '../stores'
-import { loadRoundData, KNIFE_ROUND } from './RoundSelector'
+import { loadRoundData } from './RoundSelector'
 
 export default function Scoreboard() {
-  const { selectedDemo, rounds, preloadTotal, preloadDone, preloadActive } = useDemoStore()
+  const { selectedDemo, rounds } = useDemoStore()
   const { currentRound, setRound } = usePlaybackStore()
 
   if (!selectedDemo) return (
@@ -98,27 +98,6 @@ export default function Scoreboard() {
 
       </div>
 
-      {/* Preload progressbar */}
-      {preloadActive && (
-        <div style={{ padding:'3px 14px 4px', background:'#0d0f14' }}>
-          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
-            <span style={{ fontSize:9, color:'#6b7280' }}>
-              Ladataan kierroksia muistiin... {preloadDone}/{preloadTotal}
-            </span>
-            <span style={{ fontSize:9, color:'#f97316', marginLeft:'auto' }}>
-              {Math.round((preloadDone / Math.max(preloadTotal, 1)) * 100)}%
-            </span>
-          </div>
-          <div style={{ height:2, background:'#1e2130', borderRadius:1 }}>
-            <div style={{
-              height:'100%', borderRadius:1,
-              background:'linear-gradient(90deg, #f97316, #fb923c)',
-              width:`${(preloadDone / Math.max(preloadTotal, 1)) * 100}%`,
-              transition:'width .3s ease',
-            }}/>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

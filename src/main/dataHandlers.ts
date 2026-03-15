@@ -27,11 +27,10 @@ const DB_CONFIG: sql.config = {
   }
 }
 
-console.log('[DB] Config loaded: localhost:1433, user=cs2user')
 
 let pool: sql.ConnectionPool | null = null
 
-// ── Round-cache — välttää toistuvat Python/SQL-kutsut ────────────────────────
+
 interface RoundCache {
   positions: any[]
   kills: any[]
@@ -44,33 +43,10 @@ interface RoundCache {
   shots: any[]
   damage: any[]
 }
-const roundCache = new Map<string, RoundCache>()
-const CACHE_MAX = 50  // riittää kaikille kierroksille normaalissa demossa
 
-function cacheKey(demoId: number, roundNum: number) {
-  return `${demoId}_${roundNum}`
-}
-
-function cacheSet(demoId: number, roundNum: number, data: RoundCache) {
-  const key = cacheKey(demoId, roundNum)
-  roundCache.set(key, data)
-  if (roundCache.size > CACHE_MAX) {
-    const oldest = roundCache.keys().next().value
-    if (oldest) roundCache.delete(oldest)
-  }
-}
-
+// ── Kierrosdatan lataus (ilman main-prosessin välimuistia) ───────────────────
 // Standalone funktio — käytettävissä sekä IPC-handlereissa että preloadissa
-async function loadRoundDataCached(demoId: number, roundNum: number): Promise<RoundCache> {
-  const key = cacheKey(demoId, roundNum)
-  if (roundCache.has(key)) {
-    const cached = roundCache.get(key)!
-    const size = JSON.stringify(cached).length
-    console.log(`[loadRoundAll] cache hit: demo=${demoId} round=${roundNum} size=${(size/1024).toFixed(0)}KB pos=${cached.positions.length}`)
-    return cached
-  }
-
-  console.log(`[loadRoundAll] cache miss: demo=${demoId} round=${roundNum} — ladataan...`)
+async function loadRoundData(demoId: number, roundNum: number): Promise<RoundCache> {
   const t0 = Date.now()
 
   const isDev     = process.env['ELECTRON_RENDERER_URL'] !== undefined
@@ -118,15 +94,13 @@ async function loadRoundDataCached(demoId: number, roundNum: number): Promise<Ro
     ])
 
   const roundData: RoundCache = { positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots, damage }
-  cacheSet(demoId, roundNum, roundData)
-  console.log(`[loadRoundAll] demo=${demoId} round=${roundNum} valmis ${Date.now()-t0}ms`)
   return roundData
 }
 
 async function getPool(): Promise<sql.ConnectionPool> {
   if (!pool || !pool.connected) {
     pool = await new sql.ConnectionPool(DB_CONFIG).connect()
-    console.log('✅ SQL Server yhteys muodostettu')
+    console.log('[DB] SQL Server connection established')
   }
   return pool
 }
@@ -447,40 +421,9 @@ export function registerDataHandlers() {
     return result.recordset
   })
 
-  // ── Kaikki kierroksen data yhdellä kutsulla + cache ──────────────────────
+  // ── Kaikki kierroksen data yhdellä kutsulla ───────────────────────────────
   ipcMain.handle('data:loadRoundAll', async (_, demoId: number, roundNum: number) => {
-    return loadRoundDataCached(demoId, roundNum)
-  })
-
-  // Pre-fetch handler
-  ipcMain.on('prefetch:round', async (_, demoId: number, roundNum: number) => {
-    if (!roundCache.has(cacheKey(demoId, roundNum))) {
-      loadRoundDataCached(demoId, roundNum).catch(() => {})
-    }
-  })
-
-  // ── Lataa kaikki kierrokset taustalla progress-callbackeilla ─────────────
-  ipcMain.handle('data:preloadAllRounds', async (event, demoId: number, roundNums: number[]) => {
-    const total = roundNums.length
-    let done = 0
-    event.sender.send('preload:progress', { done: 0, total, roundNum: null })
-
-    for (const roundNum of roundNums) {
-      if (!roundCache.has(cacheKey(demoId, roundNum))) {
-        try {
-          await loadRoundDataCached(demoId, roundNum)
-        } catch (e) {
-          console.error(`[preload] round ${roundNum} virhe:`, e)
-        }
-      }
-      done++
-      // Lähetä VAIN progress-numero — ei dataa IPC:n yli
-      event.sender.send('preload:progress', {
-        done, total, roundNum,
-        complete: done === total
-      })
-    }
-    return { done, total }
+    return loadRoundData(demoId, roundNum)
   })
 
   // ── Kumulatiiviset tilastot suoraan SQL:stä ───────────────────────────────
