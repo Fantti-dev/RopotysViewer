@@ -29,7 +29,7 @@ const DB_CONFIG: sql.config = {
 
 
 let pool: sql.ConnectionPool | null = null
-
+let poolPromise: Promise<sql.ConnectionPool> | null = null
 
 interface RoundCache {
   positions: any[]
@@ -98,11 +98,24 @@ async function loadRoundData(demoId: number, roundNum: number): Promise<RoundCac
 }
 
 async function getPool(): Promise<sql.ConnectionPool> {
-  if (!pool || !pool.connected) {
-    pool = await new sql.ConnectionPool(DB_CONFIG).connect()
-    console.log('[DB] SQL Server connection established')
+  if (pool?.connected) {
+    return pool
   }
-  return pool
+
+  if (!poolPromise) {
+    poolPromise = new sql.ConnectionPool(DB_CONFIG)
+      .connect()
+      .then((connectedPool) => {
+        pool = connectedPool
+        console.log('[DB] SQL Server connection established')
+        return connectedPool
+      })
+      .finally(() => {
+        poolPromise = null
+      })
+  }
+
+  return poolPromise
 }
 
 export function registerDataHandlers() {
