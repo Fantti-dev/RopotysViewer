@@ -9,6 +9,14 @@ let loadWorker: Promise<void> | null = null
 async function loadRoundDataNow(demoId: number, roundNum: number) {
   const t0 = performance.now()
   const rounds = useDemoStore.getState().rounds
+  const targets = roundNums.filter((roundNum) => roundNum !== skipRound)
+  const total = targets.length
+  let done = 0
+
+  useDemoStore.getState().setRoundPreload(total, 0, total > 0)
+
+  for (const roundNum of targets) {
+    if (sessionId !== preloadSessionId) return
 
   const rounds = useDemoStore.getState().rounds
   const options = getRoundLoadOptions()

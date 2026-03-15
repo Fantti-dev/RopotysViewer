@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useDemoStore, usePlaybackStore } from '../stores'
-import { loadRoundData } from '../controls/RoundSelector'
+import { loadRoundData, preloadRoundsSilently, stopRoundPreload } from '../controls/RoundSelector'
 import { clearCache } from '../roundCache'
 
 export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
@@ -50,9 +50,11 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
   }
 
   const handleSelectDemo = async (demo: typeof demos[0]) => {
+    stopRoundPreload()
     setSelectedDemo(demo)
     setLoading(true)
     clearCache()  // Tyhjennä vanha demo pois
+    setRoundPreload(0, 0, false)
     try {
       const [players, rounds] = await Promise.all([
         window.electronAPI.getPlayers(demo.id),
@@ -66,8 +68,6 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
 
       // Lataa ensimmäinen kierros heti
       await loadRoundData(demo.id, firstRound)
-      onSelect?.()
-      setLoading(false)
 
 
     } catch(e) {
