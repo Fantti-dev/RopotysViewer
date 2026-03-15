@@ -31,6 +31,12 @@ const DB_CONFIG: sql.config = {
 let pool: sql.ConnectionPool | null = null
 let poolPromise: Promise<sql.ConnectionPool> | null = null
 
+interface RoundLoadOptions {
+  includeKills?: boolean
+  includeSmokes?: boolean
+  includeBomb?: boolean
+  includeShots?: boolean
+}
 
 interface RoundCache {
   positions: any[]
@@ -47,10 +53,7 @@ interface RoundCache {
 
 // ── Kierrosdatan lataus (ilman main-prosessin välimuistia) ───────────────────
 // Standalone funktio — käytettävissä sekä IPC-handlereissa että preloadissa
-async function loadRoundData(demoId: number, roundNum: number): Promise<RoundCache> {
-  console.log(`[loadRoundAll] load demo=${demoId} round=${roundNum} — ladataan...`)
-  const t0 = Date.now()
-
+async function loadRoundData(demoId: number, roundNum: number, options: RoundLoadOptions = {}): Promise<RoundCache> {
   const isDev     = process.env['ELECTRON_RENDERER_URL'] !== undefined
   const appRoot   = isDev ? join(__dirname, '../..') : join(app.getAppPath(), '../..')
   const pythonExe = join(appRoot, 'python', 'venv', 'Scripts', 'python.exe')
@@ -101,7 +104,6 @@ async function loadRoundData(demoId: number, roundNum: number): Promise<RoundCac
     ])
 
   const roundData: RoundCache = { positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots, damage }
-  console.log(`[loadRoundAll] demo=${demoId} round=${roundNum} valmis ${Date.now()-t0}ms`)
   return roundData
 }
 
@@ -443,8 +445,8 @@ export function registerDataHandlers() {
   })
 
   // ── Kaikki kierroksen data yhdellä kutsulla ───────────────────────────────
-  ipcMain.handle('data:loadRoundAll', async (_, demoId: number, roundNum: number) => {
-    return loadRoundData(demoId, roundNum)
+  ipcMain.handle('data:loadRoundAll', async (_, demoId: number, roundNum: number, options?: RoundLoadOptions) => {
+    return loadRoundData(demoId, roundNum, options)
   })
 
   // ── Kumulatiiviset tilastot suoraan SQL:stä ───────────────────────────────

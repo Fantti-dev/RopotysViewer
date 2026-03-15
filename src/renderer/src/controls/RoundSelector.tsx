@@ -3,11 +3,40 @@ import { getCachedRound, setCachedRound } from '../roundCache'
 
 export const KNIFE_ROUND = -1  // varattu myöhempää käyttöä varten
 
-let queuedRound: { demoId: number; roundNum: number } | null = null
-let loadWorker: Promise<void> | null = null
+let activeRequestId = 0
+let preloadSessionId = 0
 
-async function loadRoundDataNow(demoId: number, roundNum: number) {
-  const t0 = performance.now()
+
+function getRoundLoadOptions() {
+  const layers = useLayerStore.getState()
+  return {
+    includeKills: layers.kills || layers.killLines,
+    includeSmokes: layers.smokes,
+    includeBomb: layers.bomb,
+    includeShots: layers.shots,
+  }
+}
+
+function optionsVariant(options: ReturnType<typeof getRoundLoadOptions>) {
+  return `${options.includeKills ? 1 : 0}${options.includeSmokes ? 1 : 0}${options.includeBomb ? 1 : 0}${options.includeShots ? 1 : 0}`
+}
+
+const FULL_PRELOAD_OPTIONS = {
+  includeKills: true,
+  includeSmokes: true,
+  includeBomb: true,
+  includeShots: true,
+}
+
+const FULL_PRELOAD_VARIANT = optionsVariant(FULL_PRELOAD_OPTIONS)
+
+export function stopRoundPreload() {
+  preloadSessionId++
+  useDemoStore.getState().setRoundPreload(0, 0, false)
+}
+
+export async function preloadRoundsSilently(demoId: number, roundNums: number[], skipRound?: number) {
+  const sessionId = ++preloadSessionId
   const rounds = useDemoStore.getState().rounds
   const targets = roundNums.filter((roundNum) => roundNum !== skipRound)
   const total = targets.length
@@ -18,10 +47,36 @@ async function loadRoundDataNow(demoId: number, roundNum: number) {
   for (const roundNum of targets) {
     if (sessionId !== preloadSessionId) return
 
+    if (getCachedRound(demoId, roundNum, FULL_PRELOAD_VARIANT)) {
+      done++
+      useDemoStore.getState().setRoundPreload(total, done, done < total)
+      continue
+    }
+
+    try {
+      const raw = await window.electronAPI.loadRoundAll(demoId, roundNum, FULL_PRELOAD_OPTIONS)
+      if (sessionId !== preloadSessionId) return
+      const roundInfo = rounds.find(r => r.round_num === roundNum)
+      setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick, FULL_PRELOAD_VARIANT)
+    } catch {
+      // Silent preload: ignore per-round failures, on-demand loading still works.
+    }
+
+    done++
+    useDemoStore.getState().setRoundPreload(total, done, done < total)
+
+    // Yield back to UI/event loop between rounds.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
+
+export async function loadRoundData(demoId: number, roundNum: number) {
+  const requestId = ++activeRequestId
+
   const rounds = useDemoStore.getState().rounds
   const options = getRoundLoadOptions()
   const variant = optionsVariant(options)
-  const cached = getCachedRound(demoId, roundNum, variant)
+  const cached = getCachedRound(demoId, roundNum, variant) ?? getCachedRound(demoId, roundNum, FULL_PRELOAD_VARIANT)
   if (cached) {
     applyRoundData(cached)
     return
@@ -34,32 +89,8 @@ async function loadRoundDataNow(demoId: number, roundNum: number) {
   }
 
   const roundInfo = rounds.find(r => r.round_num === roundNum)
-  setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick)
-  applyRoundData(getCachedRound(demoId, roundNum)!)
-
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`[loadRound] round=${roundNum} ${(performance.now() - t0).toFixed(0)}ms`)
-  }
-}
-
-export async function loadRoundData(demoId: number, roundNum: number) {
-  queuedRound = { demoId, roundNum }
-
-  if (loadWorker) {
-    return loadWorker
-  }
-
-  loadWorker = (async () => {
-    while (queuedRound) {
-      const target = queuedRound
-      queuedRound = null
-      await loadRoundDataNow(target.demoId, target.roundNum)
-    }
-  })().finally(() => {
-    loadWorker = null
-  })
-
-  return loadWorker
+  setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick, variant)
+  applyRoundData(getCachedRound(demoId, roundNum, variant)!)
 }
 
 function applyRoundData(data: ReturnType<typeof getCachedRound>) {

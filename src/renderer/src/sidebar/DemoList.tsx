@@ -8,7 +8,7 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
     demos, selectedDemo, setSelectedDemo,
     setPlayers, setRounds, isLoading, setLoading,
     parseProgress, addParseProgress, clearParseProgress,
-    refreshDemos
+    setRoundPreload, refreshDemos
   } = useDemoStore()
 
   const { setRound } = usePlaybackStore()
@@ -68,6 +68,13 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
 
       // Lataa ensimmäinen kierros heti
       await loadRoundData(demo.id, firstRound)
+
+      // Käynnistä hiljainen taustacache kaikille muille kierroksille.
+      const roundNums = rounds.map((r: any) => r.round_num)
+      preloadRoundsSilently(demo.id, roundNums, firstRound).catch(() => {})
+
+      onSelect?.()
+      setLoading(false)
 
 
     } catch(e) {
