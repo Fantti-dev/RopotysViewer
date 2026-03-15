@@ -520,17 +520,27 @@ export function registerDataHandlers() {
         .input('demoId', sql.Int, demoId)
         .input('upToRound', sql.Int, upToRound)
         .query(`
-          SELECT d.attacker_steam_id AS steam_id,
-            SUM(d.damage) AS total_damage,
-            SUM(CASE WHEN REPLACE(d.weapon,'weapon_','') IN ('hegrenade','molotov','incgrenade')
-              THEN d.damage ELSE 0 END) AS util_damage
-          FROM damage d
-          JOIN players pa ON pa.demo_id=d.demo_id AND pa.steam_id=d.attacker_steam_id
-          JOIN players pv ON pv.demo_id=d.demo_id AND pv.steam_id=d.victim_steam_id
-          JOIN rounds r ON r.demo_id=d.demo_id AND r.round_num=d.round_num
-          WHERE d.demo_id=@demoId AND d.round_num < @upToRound AND d.round_num > 0 AND ISNULL(r.is_knife,0)=0
-            AND pa.team_start <> pv.team_start
-          GROUP BY d.attacker_steam_id
+          WITH dmg_grouped AS (
+            SELECT
+              d.attacker_steam_id,
+              d.round_num,
+              d.victim_steam_id,
+              SUM(d.damage) AS dmg_sum,
+              SUM(CASE WHEN REPLACE(d.weapon,'weapon_','') IN ('hegrenade','molotov','incgrenade') THEN d.damage ELSE 0 END) AS util_dmg_sum
+            FROM damage d
+            JOIN players pa ON pa.demo_id=d.demo_id AND pa.steam_id=d.attacker_steam_id
+            JOIN players pv ON pv.demo_id=d.demo_id AND pv.steam_id=d.victim_steam_id
+            JOIN rounds r ON r.demo_id=d.demo_id AND r.round_num=d.round_num
+            WHERE d.demo_id=@demoId AND d.round_num < @upToRound AND d.round_num > 0 AND ISNULL(r.is_knife,0)=0
+              AND pa.team_start <> pv.team_start
+            GROUP BY d.attacker_steam_id, d.round_num, d.victim_steam_id
+          )
+          SELECT
+            attacker_steam_id AS steam_id,
+            SUM(CASE WHEN dmg_sum > 100 THEN 100 ELSE dmg_sum END) AS total_damage,
+            SUM(CASE WHEN util_dmg_sum > 100 THEN 100 ELSE util_dmg_sum END) AS util_damage
+          FROM dmg_grouped
+          GROUP BY attacker_steam_id
         `),
       p.request()
         .input('demoId', sql.Int, demoId)

@@ -143,6 +143,8 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
         }
       })
 
+      const roundVictimDamage = new Map<string, { total: number; util: number }>()
+
       damage.filter(d => d.tick <= currentTick).forEach(d => {
         const attackerId = String(d.attacker_steam_id)
         const victimId = String(d.victim_steam_id)
@@ -153,12 +155,21 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
         if (attackerTeam && victimTeam && attackerTeam === victimTeam) {
           return
         }
-        atk.totalDamage += d.damage ?? 0
-        if (UTIL_GRENADES.has((d.weapon ?? '').replace('weapon_', ''))) {
-          atk.utilDamage += d.damage ?? 0
-        }
+        const key = `${attackerId}:${victimId}`
+        const existing = roundVictimDamage.get(key) ?? { total: 0, util: 0 }
+        existing.total += d.damage ?? 0
+        if (UTIL_GRENADES.has((d.weapon ?? '').replace('weapon_', ''))) existing.util += d.damage ?? 0
+        roundVictimDamage.set(key, existing)
         currentRoundParticipants.add(attackerId)
       })
+
+      for (const [key, value] of roundVictimDamage.entries()) {
+        const attackerId = key.split(':', 1)[0]
+        const atk = map.get(attackerId)
+        if (!atk) continue
+        atk.totalDamage += Math.min(100, value.total)
+        atk.utilDamage += Math.min(100, value.util)
+      }
 
       currentRoundParticipants.forEach((steamId) => {
         const player = map.get(steamId)

@@ -1002,6 +1002,47 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
                     ss(row.get("attacker_steamid")) or None
                 ))
 
+        def build_flash_rows_from_blind_events() -> list[tuple]:
+            try:
+                blind_df = parser.parse_event("player_blind", player=["attacker_steamid", "blind_duration", "flash_duration"])
+            except Exception:
+                blind_df = pd.DataFrame()
+
+            if blind_df.empty:
+                return []
+
+            rows = []
+            for _, row in blind_df.iterrows():
+                tick = ii(row.get("tick"))
+                blinded_id = ss(row.get("user_steamid")) or None
+                thrower_id = ss(row.get("attacker_steamid")) or None
+                if not blinded_id:
+                    continue
+
+                dur = f(row.get("blind_duration") if row.get("blind_duration") is not None else row.get("flash_duration"))
+                if dur <= 0:
+                    dur = 0.1
+
+                if thrower_id and thrower_id == blinded_id:
+                    thrower_id = None
+
+                if thrower_id:
+                    bt = player_team.get(blinded_id)
+                    tt = player_team.get(thrower_id)
+                    if bt and tt and bt == tt:
+                        thrower_id = None
+
+                rows.append((
+                    demo_id,
+                    tick_to_round_num(tick),
+                    tick,
+                    thrower_id,
+                    blinded_id,
+                    dur,
+                    "player_blind_event"
+                ))
+            return rows
+
         try:
             flash_ticks = parser.parse_ticks(["flash_duration"], players=None)
         except Exception:
@@ -1074,6 +1115,9 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
 
                     prev_val = cur
 
+            if not flash_rows:
+                flash_rows = build_flash_rows_from_blind_events()
+
             if flash_rows:
                 cursor.executemany("""
                     INSERT INTO flash_events
@@ -1083,53 +1127,17 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
             conn.commit()
             log(f"    Flash-tapahtumat: {len(flash_rows)}")
         else:
-            # Fallback: rakennetaan flash_eventit suoraan player_blind eventeistä.
-            try:
-                blind_df = parser.parse_event("player_blind", player=["attacker_steamid", "blind_duration", "flash_duration"])
-            except Exception:
-                blind_df = pd.DataFrame()
+            flash_rows = build_flash_rows_from_blind_events()
 
-            if blind_df.empty:
+            if not flash_rows:
                 log("    flash_duration-proppia ei löydy — flash-tapahtumat skipataan")
             else:
-                flash_rows = []
-                for _, row in blind_df.iterrows():
-                    tick = ii(row.get("tick"))
-                    blinded_id = ss(row.get("user_steamid")) or None
-                    thrower_id = ss(row.get("attacker_steamid")) or None
-                    if not blinded_id:
-                        continue
-
-                    dur = f(row.get("blind_duration") if row.get("blind_duration") is not None else row.get("flash_duration"))
-                    if dur <= 0:
-                        dur = 0.1
-
-                    if thrower_id and thrower_id == blinded_id:
-                        thrower_id = None
-
-                    if thrower_id:
-                        bt = player_team.get(blinded_id)
-                        tt = player_team.get(thrower_id)
-                        if bt and tt and bt == tt:
-                            thrower_id = None
-
-                    flash_rows.append((
-                        demo_id,
-                        tick_to_round_num(tick),
-                        tick,
-                        thrower_id,
-                        blinded_id,
-                        dur,
-                        "player_blind_event"
-                    ))
-
-                if flash_rows:
-                    cursor.executemany("""
-                        INSERT INTO flash_events
-                        (demo_id, round_num, tick, thrower_steam_id, blinded_steam_id, flash_duration, match_quality)
-                        VALUES (?,?,?,?,?,?,?)
-                    """, flash_rows)
-                    conn.commit()
+                cursor.executemany("""
+                    INSERT INTO flash_events
+                    (demo_id, round_num, tick, thrower_steam_id, blinded_steam_id, flash_duration, match_quality)
+                    VALUES (?,?,?,?,?,?,?)
+                """, flash_rows)
+                conn.commit()
                 log(f"    Flash-tapahtumat fallback(player_blind): {len(flash_rows)}")
     except Exception as e:
         log(f"    [VAROITUS] Flash-parsinta: {e}")
