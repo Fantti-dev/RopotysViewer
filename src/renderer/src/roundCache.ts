@@ -1,6 +1,6 @@
 /**
  * Renderer-puolen kierrosdata-cache.
- * Data kulkee IPC:n yli vain kerran (preloadin aikana),
+ * Data kulkee IPC:n yli vain tarvittaessa ensimmäisellä kierrosavauksella,
  * jonka jälkeen kierroksen vaihto on pelkkä Map-haku.
  */
 

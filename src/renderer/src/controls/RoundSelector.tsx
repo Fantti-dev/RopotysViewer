@@ -3,14 +3,16 @@ import { getCachedRound, setCachedRound } from '../roundCache'
 
 export const KNIFE_ROUND = -1  // varattu myöhempää käyttöä varten
 
-export async function loadRoundData(demoId: number, roundNum: number) {
+let queuedRound: { demoId: number; roundNum: number } | null = null
+let loadWorker: Promise<void> | null = null
+
+async function loadRoundDataNow(demoId: number, roundNum: number) {
   const t0 = performance.now()
   const rounds = useDemoStore.getState().rounds
 
   const cached = getCachedRound(demoId, roundNum)
   if (cached) {
     applyRoundData(cached)
-    console.log(`[loadRound] cache hit round=${roundNum} ${(performance.now()-t0).toFixed(1)}ms`)
     return
   }
 
@@ -18,7 +20,30 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   const roundInfo = rounds.find(r => r.round_num === roundNum)
   setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick)
   applyRoundData(getCachedRound(demoId, roundNum)!)
-  console.log(`[loadRound] IPC valmis round=${roundNum} ${(performance.now()-t0).toFixed(0)}ms`)
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[loadRound] round=${roundNum} ${(performance.now() - t0).toFixed(0)}ms`)
+  }
+}
+
+export async function loadRoundData(demoId: number, roundNum: number) {
+  queuedRound = { demoId, roundNum }
+
+  if (loadWorker) {
+    return loadWorker
+  }
+
+  loadWorker = (async () => {
+    while (queuedRound) {
+      const target = queuedRound
+      queuedRound = null
+      await loadRoundDataNow(target.demoId, target.roundNum)
+    }
+  })().finally(() => {
+    loadWorker = null
+  })
+
+  return loadWorker
 }
 
 function applyRoundData(data: ReturnType<typeof getCachedRound>) {
