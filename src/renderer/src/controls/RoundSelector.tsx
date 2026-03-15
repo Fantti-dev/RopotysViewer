@@ -15,6 +15,8 @@ function getRoundLoadOptions() {
     includeSmokes: layers.smokes,
     includeBomb: layers.bomb,
     includeShots: layers.shots,
+    includeGrenades: layers.grenades || layers.smokes,
+    includeTrajectories: layers.grenades || layers.smokes,
   }
 }
 
@@ -27,6 +29,8 @@ const FULL_PRELOAD_OPTIONS = {
   includeSmokes: false,
   includeBomb: false,
   includeShots: false,
+  includeGrenades: false,
+  includeTrajectories: false,
 }
 
 const FULL_PRELOAD_VARIANT = optionsVariant(FULL_PRELOAD_OPTIONS)
@@ -38,7 +42,7 @@ function loadKey(demoId: number, roundNum: number, variant: string) {
 function loadRoundAllDedup(
   demoId: number,
   roundNum: number,
-  options: { includeKills?: boolean; includeSmokes?: boolean; includeBomb?: boolean; includeShots?: boolean },
+  options: { includeKills?: boolean; includeSmokes?: boolean; includeBomb?: boolean; includeShots?: boolean; includeGrenades?: boolean; includeTrajectories?: boolean },
   variant: string
 ) {
   const key = loadKey(demoId, roundNum, variant)

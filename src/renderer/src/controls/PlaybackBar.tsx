@@ -47,7 +47,10 @@ export default function PlaybackBar() {
       const subProgress   = totalProgress - advance
 
       // Diagnostics: playback hitch/jank visibility while preloading/cacheing.
-      if (elapsed > 80 || advance > 5) {
+      // Avoid noise at high speed: log only severe stalls.
+      const severeElapsed = elapsed > 120
+      const severeAdvance = advance > Math.max(24, Math.round(speedRef.current * 3))
+      if (severeElapsed || severeAdvance) {
         const sinceLast = now - lastJankLogRef.current
         if (sinceLast > 2000) {
           lastJankLogRef.current = now
@@ -55,6 +58,7 @@ export default function PlaybackBar() {
             elapsedMs: Math.round(elapsed),
             advancedTicks: advance,
             speed: speedRef.current,
+            reason: severeElapsed ? 'elapsed' : 'advance',
             currentTick: ticks[tickIdxRef.current] ?? null,
             tickCount: ticks.length,
           }).catch(() => {})

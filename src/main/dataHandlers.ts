@@ -56,6 +56,8 @@ interface RoundLoadOptions {
   includeSmokes?: boolean
   includeBomb?: boolean
   includeShots?: boolean
+  includeGrenades?: boolean
+  includeTrajectories?: boolean
 }
 
 interface RoundCache {
@@ -109,17 +111,55 @@ async function loadRoundData(demoId: number, roundNum: number, options: RoundLoa
   const includeSmokes = options.includeSmokes !== false
   const includeBomb = options.includeBomb !== false
   const includeShots = options.includeShots !== false
+  const includeGrenades = options.includeGrenades !== false
+  const includeTrajectories = options.includeTrajectories !== false
+
+  let damageWindowDiagnostics: Record<string, unknown> | undefined
+  if (includeKills) {
+    try {
+      const boundsAndCounts = await p.request()
+        .input('demoId', sql.Int, demoId)
+        .input('roundNum', sql.Int, roundNum)
+        .query(`
+          SELECT
+            r.start_tick AS round_start_tick,
+            ISNULL(rn.start_tick, 2147483647) AS round_end_tick,
+            COUNT(d.id) AS total_damage_rows,
+            SUM(CASE WHEN d.tick >= r.start_tick AND d.tick < ISNULL(rn.start_tick, 2147483647) THEN 1 ELSE 0 END) AS in_window_rows,
+            SUM(CASE WHEN d.tick < r.start_tick THEN 1 ELSE 0 END) AS before_round_rows,
+            SUM(CASE WHEN d.tick >= ISNULL(rn.start_tick, 2147483647) THEN 1 ELSE 0 END) AS after_round_rows
+          FROM rounds r
+          LEFT JOIN rounds rn ON rn.demo_id=r.demo_id AND rn.round_num=r.round_num+1
+          LEFT JOIN damage d ON d.demo_id=r.demo_id AND d.round_num=r.round_num
+          WHERE r.demo_id=@demoId AND r.round_num=@roundNum
+          GROUP BY r.start_tick, rn.start_tick
+        `)
+      const row = boundsAndCounts.recordset[0]
+      if (row) {
+        damageWindowDiagnostics = {
+          roundStartTick: row.round_start_tick,
+          roundEndTick: row.round_end_tick,
+          totalRows: row.total_damage_rows ?? 0,
+          inWindowRows: row.in_window_rows ?? 0,
+          beforeRoundRows: row.before_round_rows ?? 0,
+          afterRoundRows: row.after_round_rows ?? 0,
+        }
+      }
+    } catch {
+      // keep load resilient even if diagnostics query fails
+    }
+  }
 
   const [positions, kills, grenades, smokes, bomb, flash, shots, trajectories, infernoFires, damage] =
     await Promise.all([
       runPy(join(appRoot,'python','read_positions.py'),    join(appRoot,'demos',`${demoId}_positions.parquet`),     String(roundNum)),
       includeKills ? sqlRound(`SELECT k.*, pa.name AS attacker_name, pv.name AS victim_name, pas.name AS assister_name FROM kills k LEFT JOIN players pa ON pa.steam_id=k.attacker_steam_id AND pa.demo_id=k.demo_id LEFT JOIN players pv ON pv.steam_id=k.victim_steam_id AND pv.demo_id=k.demo_id LEFT JOIN players pas ON pas.steam_id=k.assister_steam_id AND pas.demo_id=k.demo_id WHERE k.demo_id=@demoId AND k.round_num=@roundNum ORDER BY k.tick`) : Promise.resolve([]),
-      sqlRound(`SELECT g.*, p.name AS thrower_name FROM grenades g LEFT JOIN players p ON p.steam_id=g.thrower_steam_id AND p.demo_id=g.demo_id WHERE g.demo_id=@demoId AND g.round_num=@roundNum ORDER BY g.tick_thrown`),
+      includeGrenades ? sqlRound(`SELECT g.*, p.name AS thrower_name FROM grenades g LEFT JOIN players p ON p.steam_id=g.thrower_steam_id AND p.demo_id=g.demo_id WHERE g.demo_id=@demoId AND g.round_num=@roundNum ORDER BY g.tick_thrown`) : Promise.resolve([]),
       includeSmokes ? sqlRound(`SELECT se.* FROM smoke_effects se INNER JOIN grenades g ON g.id=se.grenade_id WHERE g.demo_id=@demoId AND g.round_num=@roundNum ORDER BY se.start_tick`) : Promise.resolve([]),
       includeBomb ? sqlRound(`SELECT be.*, p.name AS player_name FROM bomb_events be LEFT JOIN players p ON p.steam_id=be.player_steam_id AND p.demo_id=be.demo_id WHERE be.demo_id=@demoId AND be.round_num=@roundNum ORDER BY be.tick`) : Promise.resolve([]),
       includeKills ? sqlRound(`SELECT fe.*, pt.name AS thrower_name, pb.name AS blinded_name FROM flash_events fe LEFT JOIN players pt ON pt.steam_id=fe.thrower_steam_id AND pt.demo_id=fe.demo_id LEFT JOIN players pb ON pb.steam_id=fe.blinded_steam_id AND pb.demo_id=fe.demo_id WHERE fe.demo_id=@demoId AND fe.round_num=@roundNum ORDER BY fe.tick`) : Promise.resolve([]),
       includeShots ? sqlRound(`SELECT sf.*, p.name AS player_name FROM shots_fired sf LEFT JOIN players p ON p.steam_id=sf.steam_id AND p.demo_id=sf.demo_id WHERE sf.demo_id=@demoId AND sf.round_num=@roundNum ORDER BY sf.tick`) : Promise.resolve([]),
-      runPy(join(appRoot,'python','read_trajectories.py'), join(appRoot,'demos',`${demoId}_trajectories.parquet`),  String(demoId), String(roundNum)),
+      includeTrajectories ? runPy(join(appRoot,'python','read_trajectories.py'), join(appRoot,'demos',`${demoId}_trajectories.parquet`),  String(demoId), String(roundNum)) : Promise.resolve([]),
       includeSmokes ? runPy(join(appRoot,'python','read_inferno_fires.py'),join(appRoot,'demos',`${demoId}_inferno_fires.parquet`), String(demoId), String(roundNum)) : Promise.resolve([]),
       includeKills ? sqlRound(`SELECT d.*, pa.name AS attacker_name, pv.name AS victim_name FROM damage d JOIN rounds r ON r.demo_id=d.demo_id AND r.round_num=d.round_num LEFT JOIN rounds rn ON rn.demo_id=r.demo_id AND rn.round_num=r.round_num+1 LEFT JOIN players pa ON pa.steam_id=d.attacker_steam_id AND pa.demo_id=d.demo_id LEFT JOIN players pv ON pv.steam_id=d.victim_steam_id AND pv.demo_id=d.demo_id WHERE d.demo_id=@demoId AND d.round_num=@roundNum AND d.tick >= r.start_tick AND d.tick < ISNULL(rn.start_tick, 2147483647) ORDER BY d.tick`) : Promise.resolve([]),
     ])
@@ -141,6 +181,11 @@ async function loadRoundData(demoId: number, roundNum: number, options: RoundLoa
       damage: damage.length,
       trajectories: trajectories.length,
     },
+    damageWindowDiagnostics,
+    damageTickRange: damage.length > 0 ? {
+      minTick: damage[0]?.tick,
+      maxTick: damage[damage.length - 1]?.tick,
+    } : null,
     options,
   })
   return roundData
@@ -327,6 +372,14 @@ export function registerDataHandlers() {
           AND d.tick < ISNULL(rn.start_tick, 2147483647)
         ORDER BY d.tick
       `)
+    writeDebugLog('damage.endpoint.result', {
+      demoId,
+      roundNum,
+      rows: result.recordset.length,
+      tickRange: result.recordset.length > 0
+        ? { minTick: result.recordset[0]?.tick, maxTick: result.recordset[result.recordset.length - 1]?.tick }
+        : null,
+    })
     return result.recordset
   })
 
@@ -566,6 +619,18 @@ export function registerDataHandlers() {
           GROUP BY fe.thrower_steam_id
         `),
     ])
+    writeDebugLog('damage.cumulative.result', {
+      demoId,
+      upToRound,
+      rows: damage.recordset.length,
+      totalDamage: damage.recordset.reduce((acc: number, r: any) => acc + Number(r.total_damage ?? 0), 0),
+      totalUtilDamage: damage.recordset.reduce((acc: number, r: any) => acc + Number(r.util_damage ?? 0), 0),
+      topPlayers: damage.recordset
+        .slice()
+        .sort((a: any, b: any) => Number(b.total_damage ?? 0) - Number(a.total_damage ?? 0))
+        .slice(0, 5)
+        .map((r: any) => ({ steamId: r.steam_id, totalDamage: r.total_damage, utilDamage: r.util_damage })),
+    })
     return { kills: kills.recordset, damage: damage.recordset, flash: flash.recordset }
   })
 

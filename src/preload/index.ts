@@ -69,7 +69,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('data:getShotsFired', demoId, roundNum),
 
   // ── Kaikki round-data yhdellä kutsulla (cache) ─────────────────────────────
-  loadRoundAll: (demoId: number, roundNum: number, options?: { includeKills?: boolean; includeSmokes?: boolean; includeBomb?: boolean; includeShots?: boolean }) =>
+  loadRoundAll: (demoId: number, roundNum: number, options?: { includeKills?: boolean; includeSmokes?: boolean; includeBomb?: boolean; includeShots?: boolean; includeGrenades?: boolean; includeTrajectories?: boolean }) =>
     ipcRenderer.invoke('data:loadRoundAll', demoId, roundNum, options),
 
   getCumulativeStats: (demoId: number, upToRound: number) =>
