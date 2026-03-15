@@ -73,74 +73,23 @@ interface RoundCache {
   damage: any[]
 }
 
-function writeRoundEventLogs(demoId: number, roundNum: number, roundData: RoundCache) {
-  for (const shot of roundData.shots) {
-    writeDebugLog('event.shot_fired', {
-      demoId,
-      roundNum,
-      tick: shot.tick,
-      steamId: shot.steam_id,
-      weapon: shot.weapon,
-      x: shot.x,
-      y: shot.y,
-      z: shot.z,
-    })
-  }
+function buildDamageDoneSummary(damageRows: any[]) {
+  const byPlayer = new Map<string, { steamId: string; totalDamage: number; utilDamage: number; hits: number }>()
 
-  for (const damage of roundData.damage) {
-    const weapon = String(damage.weapon ?? '')
+  for (const row of damageRows) {
+    const steamId = String(row.attacker_steam_id ?? '')
+    if (!steamId) continue
+    const damage = Number(row.damage ?? 0)
+    const weapon = String(row.weapon ?? '')
     const isUtility = ['hegrenade', 'molotov', 'incgrenade', 'inferno'].some((kind) => weapon.includes(kind))
-    writeDebugLog('event.damage', {
-      demoId,
-      roundNum,
-      tick: damage.tick,
-      attackerSteamId: damage.attacker_steam_id,
-      victimSteamId: damage.victim_steam_id,
-      weapon: damage.weapon,
-      damage: damage.damage,
-      armorDamage: damage.armor_damage,
-      healthAfter: damage.health_after,
-      hitgroup: damage.hitgroup,
-      isUtility,
-    })
-
-    if (isUtility) {
-      writeDebugLog('event.utility_damage', {
-        demoId,
-        roundNum,
-        tick: damage.tick,
-        attackerSteamId: damage.attacker_steam_id,
-        victimSteamId: damage.victim_steam_id,
-        weapon: damage.weapon,
-        damage: damage.damage,
-      })
-    }
+    const prev = byPlayer.get(steamId) ?? { steamId, totalDamage: 0, utilDamage: 0, hits: 0 }
+    prev.totalDamage += damage
+    prev.hits += 1
+    if (isUtility) prev.utilDamage += damage
+    byPlayer.set(steamId, prev)
   }
 
-  for (const grenade of roundData.grenades) {
-    writeDebugLog('event.grenade_throw', {
-      demoId,
-      roundNum,
-      tickThrown: grenade.tick_thrown,
-      tickDetonated: grenade.tick_detonated,
-      throwerSteamId: grenade.thrower_steam_id,
-      grenadeType: grenade.grenade_type,
-      throw: { x: grenade.throw_x, y: grenade.throw_y, z: grenade.throw_z },
-      detonate: { x: grenade.detonate_x, y: grenade.detonate_y, z: grenade.detonate_z },
-    })
-  }
-
-  for (const flashEvent of roundData.flash) {
-    writeDebugLog('event.flash', {
-      demoId,
-      roundNum,
-      tick: flashEvent.tick,
-      throwerSteamId: flashEvent.thrower_steam_id,
-      blindedSteamId: flashEvent.blinded_steam_id,
-      flashDuration: flashEvent.flash_duration,
-      matchQuality: flashEvent.match_quality,
-    })
-  }
+  return Array.from(byPlayer.values()).sort((a, b) => b.totalDamage - a.totalDamage)
 }
 
 const roundDataCache = new Map<string, RoundCache>()
@@ -317,9 +266,7 @@ async function loadRoundDataUncached(demoId: number, roundNum: number, options: 
     ])
 
   const roundData: RoundCache = { positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots, damage }
-  if (includeKills || includeShots || includeGrenades) {
-    writeRoundEventLogs(demoId, roundNum, roundData)
-  }
+  const damageDoneByPlayer = buildDamageDoneSummary(damage)
 
   writeDebugLog('round.load.main.complete', {
     demoId,
@@ -342,6 +289,7 @@ async function loadRoundDataUncached(demoId: number, roundNum: number, options: 
       minTick: damage[0]?.tick,
       maxTick: damage[damage.length - 1]?.tick,
     } : null,
+    damageDoneByPlayer,
     options,
     damageQueryExecuted: includeKills,
   })

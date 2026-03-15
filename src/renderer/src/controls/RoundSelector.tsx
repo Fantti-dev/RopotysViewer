@@ -166,12 +166,28 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   const cached = getCachedRound(demoId, roundNum, variant)
   if (cached) {
     applyRoundData(cached, wasPlaying, roundNum)
+    const durationMs = Math.round(performance.now() - startedAt)
+    const damageDoneByPlayer = Array.from(cached.damage.reduce((acc, row) => {
+      const key = String(row.attacker_steam_id ?? '')
+      if (!key) return acc
+      acc.set(key, (acc.get(key) ?? 0) + Number(row.damage ?? 0))
+      return acc
+    }, new Map<string, number>()).entries()).map(([steamId, totalDamage]) => ({ steamId, totalDamage }))
+      .sort((a, b) => b.totalDamage - a.totalDamage)
+
     window.electronAPI.debugLog('round.load.renderer.cache_hit', {
       demoId,
       roundNum,
       variant,
       wasPlaying,
-      durationMs: Math.round(performance.now() - startedAt),
+      durationMs,
+    }).catch(() => {})
+    window.electronAPI.debugLog('round.switch.duration', {
+      demoId,
+      roundNum,
+      source: 'cache',
+      durationMs,
+      damageDoneByPlayer,
     }).catch(() => {})
     return
   }
@@ -185,12 +201,29 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   const roundInfo = rounds.find(r => r.round_num === roundNum)
   setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick, variant)
   applyRoundData(getCachedRound(demoId, roundNum, variant)!, wasPlaying, roundNum)
+  const durationMs = Math.round(performance.now() - startedAt)
+  const applied = getCachedRound(demoId, roundNum, variant)
+  const damageDoneByPlayer = Array.from((applied?.damage ?? []).reduce((acc, row) => {
+    const key = String(row.attacker_steam_id ?? '')
+    if (!key) return acc
+    acc.set(key, (acc.get(key) ?? 0) + Number(row.damage ?? 0))
+    return acc
+  }, new Map<string, number>()).entries()).map(([steamId, totalDamage]) => ({ steamId, totalDamage }))
+    .sort((a, b) => b.totalDamage - a.totalDamage)
+
   window.electronAPI.debugLog('round.load.renderer.fetch', {
     demoId,
     roundNum,
     variant,
     wasPlaying,
-    durationMs: Math.round(performance.now() - startedAt),
+    durationMs,
+  }).catch(() => {})
+  window.electronAPI.debugLog('round.switch.duration', {
+    demoId,
+    roundNum,
+    source: 'fetch',
+    durationMs,
+    damageDoneByPlayer,
   }).catch(() => {})
 }
 

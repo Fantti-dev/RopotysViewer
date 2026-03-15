@@ -182,23 +182,21 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     if (!selectedDemo) return
-    const maxAdr = stats.reduce((max, s) => Math.max(max, Math.round(s.totalDamage / Math.max(s.roundsPlayed, 1))), 0)
-    const totals = stats.reduce((acc, s) => {
-      acc.flashCount += s.enemiesFlashed
-      acc.flashSeconds += s.flashDuration
-      return acc
-    }, { flashCount: 0, flashSeconds: 0 })
+    const damageDoneByPlayer = stats
+      .map((s) => ({
+        steamId: players.find((p) => p.name === s.name)?.steam_id ?? null,
+        name: s.name,
+        totalDamage: s.totalDamage,
+        utilDamage: s.utilDamage,
+      }))
+      .sort((a, b) => b.totalDamage - a.totalDamage)
 
-    window.electronAPI.debugLog('scoreboard.snapshot', {
+    window.electronAPI.debugLog('scoreboard.damage_done', {
       demoId: selectedDemo.id,
       round: currentRound,
-      tick: currentTick,
-      players: stats.length,
-      maxAdr,
-      flashCount: totals.flashCount,
-      flashSeconds: Number(totals.flashSeconds.toFixed(2)),
+      players: damageDoneByPlayer,
     }).catch(() => {})
-  }, [selectedDemo?.id, currentRound, currentTick, stats])
+  }, [selectedDemo?.id, currentRound, stats, players])
 
   const ct = stats.filter(s => s.team === 'CT').sort((a, b) => b.kills - a.kills)
   const t  = stats.filter(s => s.team === 'T').sort((a, b) => b.kills - a.kills)
