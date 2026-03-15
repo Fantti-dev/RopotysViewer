@@ -31,9 +31,9 @@ declare global {
         flash:        FlashEvent[]
         infernoFires: InfernoFirePoint[]
         shots:        Shot[]
+        damage:       DamageEvent[]
       }>
-      preloadAllRounds: (demoId: number, roundNums: number[]) => Promise<{ done: number; total: number }>
-      onPreloadProgress: (cb: (data: { done: number; total: number; roundNum: number | null; complete?: boolean; data?: any }) => void) => () => void
+      getCumulativeStats: (demoId: number, upToRound: number) => Promise<{ kills: any[]; damage: any[]; flash: any[] }>
       getFlashEvents: (demoId: number, roundNum: number) => Promise<FlashEvent[]>
       getHeatmapPositions: (demoId: number, steamId?: string) => Promise<HeatmapPoint[]>
 

@@ -12,8 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('parser:parse', demPath),
 
   onParserProgress: (callback: (msg: string) => void) => {
-    ipcRenderer.on('parser:progress', (_, msg) => callback(msg))
-    return () => ipcRenderer.removeAllListeners('parser:progress')
+    const handler = (_event: Electron.IpcRendererEvent, msg: string) => callback(msg)
+    ipcRenderer.on('parser:progress', handler)
+    return () => ipcRenderer.removeListener('parser:progress', handler)
   },
 
   // ── Demo lista & metadata ──────────────────────────────────────────────────
@@ -73,15 +74,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getCumulativeStats: (demoId: number, upToRound: number) =>
     ipcRenderer.invoke('data:getCumulativeStats', demoId, upToRound),
-
-  // ── Lataa kaikki kierrokset taustalla ──────────────────────────────────────
-  preloadAllRounds: (demoId: number, roundNums: number[]) =>
-    ipcRenderer.invoke('data:preloadAllRounds', demoId, roundNums),
-
-  onPreloadProgress: (cb: (data: { done: number; total: number; roundNum: number | null; complete?: boolean }) => void) => {
-    ipcRenderer.on('preload:progress', (_event, data) => cb(data))
-    return () => ipcRenderer.removeAllListeners('preload:progress')
-  },
 
   // ── Heatmap (kaikki roundit) ───────────────────────────────────────────────
   getHeatmapPositions: (demoId: number, steamId?: string) =>

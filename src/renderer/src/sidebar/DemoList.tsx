@@ -8,7 +8,6 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
     demos, selectedDemo, setSelectedDemo,
     setPlayers, setRounds, isLoading, setLoading,
     parseProgress, addParseProgress, clearParseProgress,
-    preloadTotal, preloadDone, preloadActive, setPreload,
     refreshDemos
   } = useDemoStore()
 
@@ -70,17 +69,6 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
       onSelect?.()
       setLoading(false)
 
-      // Preload kaikki muut kierrokset taustalla — tallennetaan suoraan renderer-cacheen
-      const allRoundNums = rounds.map((r: any) => r.round_num)
-      setPreload(allRoundNums.length, 1, true)
-
-      const unsub = window.electronAPI.onPreloadProgress(({ done, total, complete }) => {
-        setPreload(total, done, !complete)
-        if (complete) unsub()
-      })
-
-      window.electronAPI.preloadAllRounds(demo.id, allRoundNums)
-        .catch(() => { setPreload(0, 0, false) })
 
     } catch(e) {
       setLoading(false)
