@@ -19,7 +19,7 @@ interface DemoState {
   setLoading: (v: boolean) => void
   addParseProgress: (msg: string) => void
   clearParseProgress: () => void
-  setPreload: (total: number, done: number, active: boolean) => void
+  setRoundPreload: (total: number, done: number, active: boolean) => void
   refreshDemos: () => Promise<void>
 }
 
@@ -40,7 +40,7 @@ export const useDemoStore = create<DemoState>((set) => ({
   setLoading: (isLoading) => set({ isLoading }),
   addParseProgress: (msg) => set((s) => ({ parseProgress: [...s.parseProgress.slice(-50), msg] })),
   clearParseProgress: () => set({ parseProgress: [] }),
-  setPreload: (preloadTotal, preloadDone, preloadActive) => set({ preloadTotal, preloadDone, preloadActive }),
+  setRoundPreload: (preloadTotal, preloadDone, preloadActive) => set({ preloadTotal, preloadDone, preloadActive }),
   refreshDemos: async () => {
     const demos = await window.electronAPI.getDemos()
     set({ demos })
