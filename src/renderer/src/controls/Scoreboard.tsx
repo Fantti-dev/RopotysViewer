@@ -2,7 +2,7 @@ import { useDemoStore, usePlaybackStore } from '../stores'
 import { loadRoundData } from './RoundSelector'
 
 export default function Scoreboard() {
-  const { selectedDemo, rounds, preloadTotal, preloadDone, preloadActive } = useDemoStore()
+  const { selectedDemo, rounds } = useDemoStore()
   const { currentRound, setRound } = usePlaybackStore()
 
   if (!selectedDemo) return (
