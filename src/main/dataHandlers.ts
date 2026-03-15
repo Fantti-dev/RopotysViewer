@@ -1,6 +1,7 @@
 import { ipcMain, app } from 'electron'
 import { join } from 'path'
 import { spawn } from 'child_process'
+import { mkdirSync, appendFileSync } from 'fs'
 import sql from 'mssql'
 
 // ── SQL Server konfiguraatio ──────────────────────────────────────────────────
@@ -27,11 +28,36 @@ const DB_CONFIG: sql.config = {
   }
 }
 
-console.log('[DB] Config loaded: localhost:1433, user=cs2user')
 
 let pool: sql.ConnectionPool | null = null
+let poolPromise: Promise<sql.ConnectionPool> | null = null
+let debugLogPath: string | null = null
 
-// ── Round-cache — välttää toistuvat Python/SQL-kutsut ────────────────────────
+function getDebugLogPath() {
+  if (debugLogPath) return debugLogPath
+  const debugLogDir = join(app.getPath('userData'), 'logs')
+  debugLogPath = join(debugLogDir, `debug-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`)
+  mkdirSync(debugLogDir, { recursive: true })
+  return debugLogPath
+}
+
+function writeDebugLog(event: string, payload: unknown) {
+  try {
+    const path = getDebugLogPath()
+    const row = JSON.stringify({ ts: new Date().toISOString(), event, payload })
+    appendFileSync(path, `${row}\n`, 'utf-8')
+  } catch {
+    // Logging must never crash app behavior.
+  }
+}
+
+interface RoundLoadOptions {
+  includeKills?: boolean
+  includeSmokes?: boolean
+  includeBomb?: boolean
+  includeShots?: boolean
+}
+
 interface RoundCache {
   positions: any[]
   kills: any[]
@@ -44,35 +70,11 @@ interface RoundCache {
   shots: any[]
   damage: any[]
 }
-const roundCache = new Map<string, RoundCache>()
-const CACHE_MAX = 50  // riittää kaikille kierroksille normaalissa demossa
 
-function cacheKey(demoId: number, roundNum: number) {
-  return `${demoId}_${roundNum}`
-}
-
-function cacheSet(demoId: number, roundNum: number, data: RoundCache) {
-  const key = cacheKey(demoId, roundNum)
-  roundCache.set(key, data)
-  if (roundCache.size > CACHE_MAX) {
-    const oldest = roundCache.keys().next().value
-    if (oldest) roundCache.delete(oldest)
-  }
-}
-
+// ── Kierrosdatan lataus (ilman main-prosessin välimuistia) ───────────────────
 // Standalone funktio — käytettävissä sekä IPC-handlereissa että preloadissa
-async function loadRoundDataCached(demoId: number, roundNum: number): Promise<RoundCache> {
-  const key = cacheKey(demoId, roundNum)
-  if (roundCache.has(key)) {
-    const cached = roundCache.get(key)!
-    const size = JSON.stringify(cached).length
-    console.log(`[loadRoundAll] cache hit: demo=${demoId} round=${roundNum} size=${(size/1024).toFixed(0)}KB pos=${cached.positions.length}`)
-    return cached
-  }
-
-  console.log(`[loadRoundAll] cache miss: demo=${demoId} round=${roundNum} — ladataan...`)
-  const t0 = Date.now()
-
+async function loadRoundData(demoId: number, roundNum: number, options: RoundLoadOptions = {}): Promise<RoundCache> {
+  const startedAt = Date.now()
   const isDev     = process.env['ELECTRON_RENDERER_URL'] !== undefined
   const appRoot   = isDev ? join(__dirname, '../..') : join(app.getAppPath(), '../..')
   const pythonExe = join(appRoot, 'python', 'venv', 'Scripts', 'python.exe')
@@ -103,32 +105,66 @@ async function loadRoundDataCached(demoId: number, roundNum: number): Promise<Ro
     return r.recordset
   }
 
+  const includeKills = options.includeKills !== false
+  const includeSmokes = options.includeSmokes !== false
+  const includeBomb = options.includeBomb !== false
+  const includeShots = options.includeShots !== false
+
   const [positions, kills, grenades, smokes, bomb, flash, shots, trajectories, infernoFires, damage] =
     await Promise.all([
       runPy(join(appRoot,'python','read_positions.py'),    join(appRoot,'demos',`${demoId}_positions.parquet`),     String(roundNum)),
-      sqlRound(`SELECT k.*, pa.name AS attacker_name, pv.name AS victim_name, pas.name AS assister_name FROM kills k LEFT JOIN players pa ON pa.steam_id=k.attacker_steam_id AND pa.demo_id=k.demo_id LEFT JOIN players pv ON pv.steam_id=k.victim_steam_id AND pv.demo_id=k.demo_id LEFT JOIN players pas ON pas.steam_id=k.assister_steam_id AND pas.demo_id=k.demo_id WHERE k.demo_id=@demoId AND k.round_num=@roundNum ORDER BY k.tick`),
+      includeKills ? sqlRound(`SELECT k.*, pa.name AS attacker_name, pv.name AS victim_name, pas.name AS assister_name FROM kills k LEFT JOIN players pa ON pa.steam_id=k.attacker_steam_id AND pa.demo_id=k.demo_id LEFT JOIN players pv ON pv.steam_id=k.victim_steam_id AND pv.demo_id=k.demo_id LEFT JOIN players pas ON pas.steam_id=k.assister_steam_id AND pas.demo_id=k.demo_id WHERE k.demo_id=@demoId AND k.round_num=@roundNum ORDER BY k.tick`) : Promise.resolve([]),
       sqlRound(`SELECT g.*, p.name AS thrower_name FROM grenades g LEFT JOIN players p ON p.steam_id=g.thrower_steam_id AND p.demo_id=g.demo_id WHERE g.demo_id=@demoId AND g.round_num=@roundNum ORDER BY g.tick_thrown`),
-      sqlRound(`SELECT se.* FROM smoke_effects se INNER JOIN grenades g ON g.id=se.grenade_id WHERE g.demo_id=@demoId AND g.round_num=@roundNum ORDER BY se.start_tick`),
-      sqlRound(`SELECT be.*, p.name AS player_name FROM bomb_events be LEFT JOIN players p ON p.steam_id=be.player_steam_id AND p.demo_id=be.demo_id WHERE be.demo_id=@demoId AND be.round_num=@roundNum ORDER BY be.tick`),
-      sqlRound(`SELECT fe.*, pt.name AS thrower_name, pb.name AS blinded_name FROM flash_events fe LEFT JOIN players pt ON pt.steam_id=fe.thrower_steam_id AND pt.demo_id=fe.demo_id LEFT JOIN players pb ON pb.steam_id=fe.blinded_steam_id AND pb.demo_id=fe.demo_id WHERE fe.demo_id=@demoId AND fe.round_num=@roundNum ORDER BY fe.tick`),
-      sqlRound(`SELECT sf.*, p.name AS player_name FROM shots_fired sf LEFT JOIN players p ON p.steam_id=sf.steam_id AND p.demo_id=sf.demo_id WHERE sf.demo_id=@demoId AND sf.round_num=@roundNum ORDER BY sf.tick`),
+      includeSmokes ? sqlRound(`SELECT se.* FROM smoke_effects se INNER JOIN grenades g ON g.id=se.grenade_id WHERE g.demo_id=@demoId AND g.round_num=@roundNum ORDER BY se.start_tick`) : Promise.resolve([]),
+      includeBomb ? sqlRound(`SELECT be.*, p.name AS player_name FROM bomb_events be LEFT JOIN players p ON p.steam_id=be.player_steam_id AND p.demo_id=be.demo_id WHERE be.demo_id=@demoId AND be.round_num=@roundNum ORDER BY be.tick`) : Promise.resolve([]),
+      includeKills ? sqlRound(`SELECT fe.*, pt.name AS thrower_name, pb.name AS blinded_name FROM flash_events fe LEFT JOIN players pt ON pt.steam_id=fe.thrower_steam_id AND pt.demo_id=fe.demo_id LEFT JOIN players pb ON pb.steam_id=fe.blinded_steam_id AND pb.demo_id=fe.demo_id WHERE fe.demo_id=@demoId AND fe.round_num=@roundNum ORDER BY fe.tick`) : Promise.resolve([]),
+      includeShots ? sqlRound(`SELECT sf.*, p.name AS player_name FROM shots_fired sf LEFT JOIN players p ON p.steam_id=sf.steam_id AND p.demo_id=sf.demo_id WHERE sf.demo_id=@demoId AND sf.round_num=@roundNum ORDER BY sf.tick`) : Promise.resolve([]),
       runPy(join(appRoot,'python','read_trajectories.py'), join(appRoot,'demos',`${demoId}_trajectories.parquet`),  String(demoId), String(roundNum)),
-      runPy(join(appRoot,'python','read_inferno_fires.py'),join(appRoot,'demos',`${demoId}_inferno_fires.parquet`), String(demoId), String(roundNum)),
-      sqlRound(`SELECT d.*, pa.name AS attacker_name, pv.name AS victim_name FROM damage d LEFT JOIN players pa ON pa.steam_id=d.attacker_steam_id AND pa.demo_id=d.demo_id LEFT JOIN players pv ON pv.steam_id=d.victim_steam_id AND pv.demo_id=d.demo_id WHERE d.demo_id=@demoId AND d.round_num=@roundNum ORDER BY d.tick`),
+      includeSmokes ? runPy(join(appRoot,'python','read_inferno_fires.py'),join(appRoot,'demos',`${demoId}_inferno_fires.parquet`), String(demoId), String(roundNum)) : Promise.resolve([]),
+      includeKills ? sqlRound(`SELECT d.*, pa.name AS attacker_name, pv.name AS victim_name FROM damage d LEFT JOIN players pa ON pa.steam_id=d.attacker_steam_id AND pa.demo_id=d.demo_id LEFT JOIN players pv ON pv.steam_id=d.victim_steam_id AND pv.demo_id=d.demo_id WHERE d.demo_id=@demoId AND d.round_num=@roundNum ORDER BY d.tick`) : Promise.resolve([]),
     ])
 
   const roundData: RoundCache = { positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots, damage }
-  cacheSet(demoId, roundNum, roundData)
-  console.log(`[loadRoundAll] demo=${demoId} round=${roundNum} valmis ${Date.now()-t0}ms`)
+  writeDebugLog('round.load.main.complete', {
+    demoId,
+    roundNum,
+    durationMs: Date.now() - startedAt,
+    sizes: {
+      positions: positions.length,
+      kills: kills.length,
+      grenades: grenades.length,
+      smokes: smokes.length,
+      bomb: bomb.length,
+      flash: flash.length,
+      infernoFires: infernoFires.length,
+      shots: shots.length,
+      damage: damage.length,
+      trajectories: trajectories.length,
+    },
+    options,
+  })
   return roundData
 }
 
 async function getPool(): Promise<sql.ConnectionPool> {
-  if (!pool || !pool.connected) {
-    pool = await new sql.ConnectionPool(DB_CONFIG).connect()
-    console.log('✅ SQL Server yhteys muodostettu')
+  if (pool?.connected) {
+    return pool
   }
-  return pool
+
+  if (!poolPromise) {
+    poolPromise = new sql.ConnectionPool(DB_CONFIG)
+      .connect()
+      .then((connectedPool) => {
+        pool = connectedPool
+        console.log('[DB] SQL Server connection established')
+        return connectedPool
+      })
+      .finally(() => {
+        poolPromise = null
+      })
+  }
+
+  return poolPromise
 }
 
 export function registerDataHandlers() {
@@ -447,40 +483,9 @@ export function registerDataHandlers() {
     return result.recordset
   })
 
-  // ── Kaikki kierroksen data yhdellä kutsulla + cache ──────────────────────
-  ipcMain.handle('data:loadRoundAll', async (_, demoId: number, roundNum: number) => {
-    return loadRoundDataCached(demoId, roundNum)
-  })
-
-  // Pre-fetch handler
-  ipcMain.on('prefetch:round', async (_, demoId: number, roundNum: number) => {
-    if (!roundCache.has(cacheKey(demoId, roundNum))) {
-      loadRoundDataCached(demoId, roundNum).catch(() => {})
-    }
-  })
-
-  // ── Lataa kaikki kierrokset taustalla progress-callbackeilla ─────────────
-  ipcMain.handle('data:preloadAllRounds', async (event, demoId: number, roundNums: number[]) => {
-    const total = roundNums.length
-    let done = 0
-    event.sender.send('preload:progress', { done: 0, total, roundNum: null })
-
-    for (const roundNum of roundNums) {
-      if (!roundCache.has(cacheKey(demoId, roundNum))) {
-        try {
-          await loadRoundDataCached(demoId, roundNum)
-        } catch (e) {
-          console.error(`[preload] round ${roundNum} virhe:`, e)
-        }
-      }
-      done++
-      // Lähetä VAIN progress-numero — ei dataa IPC:n yli
-      event.sender.send('preload:progress', {
-        done, total, roundNum,
-        complete: done === total
-      })
-    }
-    return { done, total }
+  // ── Kaikki kierroksen data yhdellä kutsulla ───────────────────────────────
+  ipcMain.handle('data:loadRoundAll', async (_, demoId: number, roundNum: number, options?: RoundLoadOptions) => {
+    return loadRoundData(demoId, roundNum, options)
   })
 
   // ── Kumulatiiviset tilastot suoraan SQL:stä ───────────────────────────────
@@ -497,17 +502,17 @@ export function registerDataHandlers() {
             0 AS deaths, 0 AS assists
           FROM kills k
           JOIN rounds r ON r.demo_id=k.demo_id AND r.round_num=k.round_num
-          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND ISNULL(r.is_knife,0)=0
+          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND k.round_num > 0 AND ISNULL(r.is_knife,0)=0
           GROUP BY attacker_steam_id
           UNION ALL
           SELECT victim_steam_id, 0, 0, COUNT(*), 0
           FROM kills k JOIN rounds r ON r.demo_id=k.demo_id AND r.round_num=k.round_num
-          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND ISNULL(r.is_knife,0)=0
+          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND k.round_num > 0 AND ISNULL(r.is_knife,0)=0
           GROUP BY victim_steam_id
           UNION ALL
           SELECT assister_steam_id, 0, 0, 0, COUNT(*)
           FROM kills k JOIN rounds r ON r.demo_id=k.demo_id AND r.round_num=k.round_num
-          WHERE k.demo_id=@demoId AND k.round_num < @upToRound
+          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND k.round_num > 0
             AND assister_steam_id IS NOT NULL AND ISNULL(r.is_knife,0)=0
           GROUP BY assister_steam_id
         `),
@@ -515,15 +520,27 @@ export function registerDataHandlers() {
         .input('demoId', sql.Int, demoId)
         .input('upToRound', sql.Int, upToRound)
         .query(`
-          SELECT d.attacker_steam_id AS steam_id,
-            SUM(d.damage) AS total_damage,
-            SUM(CASE WHEN REPLACE(d.weapon,'weapon_','') IN ('hegrenade','molotov','incgrenade')
-              THEN d.damage ELSE 0 END) AS util_damage,
-            COUNT(DISTINCT d.round_num) AS rounds_played
-          FROM damage d
-          JOIN rounds r ON r.demo_id=d.demo_id AND r.round_num=d.round_num
-          WHERE d.demo_id=@demoId AND d.round_num < @upToRound AND ISNULL(r.is_knife,0)=0
-          GROUP BY d.attacker_steam_id
+          WITH dmg_grouped AS (
+            SELECT
+              d.attacker_steam_id,
+              d.round_num,
+              d.victim_steam_id,
+              SUM(d.damage) AS dmg_sum,
+              SUM(CASE WHEN REPLACE(d.weapon,'weapon_','') IN ('hegrenade','molotov','incgrenade') THEN d.damage ELSE 0 END) AS util_dmg_sum
+            FROM damage d
+            JOIN players pa ON pa.demo_id=d.demo_id AND pa.steam_id=d.attacker_steam_id
+            JOIN players pv ON pv.demo_id=d.demo_id AND pv.steam_id=d.victim_steam_id
+            JOIN rounds r ON r.demo_id=d.demo_id AND r.round_num=d.round_num
+            WHERE d.demo_id=@demoId AND d.round_num < @upToRound AND d.round_num > 0 AND ISNULL(r.is_knife,0)=0
+              AND pa.team_start <> pv.team_start
+            GROUP BY d.attacker_steam_id, d.round_num, d.victim_steam_id
+          )
+          SELECT
+            attacker_steam_id AS steam_id,
+            SUM(CASE WHEN dmg_sum > 100 THEN 100 ELSE dmg_sum END) AS total_damage,
+            SUM(CASE WHEN util_dmg_sum > 100 THEN 100 ELSE util_dmg_sum END) AS util_damage
+          FROM dmg_grouped
+          GROUP BY attacker_steam_id
         `),
       p.request()
         .input('demoId', sql.Int, demoId)
@@ -536,11 +553,21 @@ export function registerDataHandlers() {
           JOIN players pt ON pt.steam_id=fe.thrower_steam_id AND pt.demo_id=fe.demo_id
           JOIN players pb ON pb.steam_id=fe.blinded_steam_id  AND pb.demo_id=fe.demo_id
           JOIN rounds r   ON r.demo_id=fe.demo_id AND r.round_num=fe.round_num
-          WHERE fe.demo_id=@demoId AND fe.round_num < @upToRound
+          WHERE fe.demo_id=@demoId AND fe.round_num < @upToRound AND fe.round_num > 0
             AND pt.team_start <> pb.team_start AND ISNULL(r.is_knife,0)=0
+            AND ISNULL(fe.match_quality,'unmatched') IN ('player_blind_event','detonation_window','entity_tick','exact_handle','spatial_strict')
           GROUP BY fe.thrower_steam_id
         `),
     ])
     return { kills: kills.recordset, damage: damage.recordset, flash: flash.recordset }
+  })
+
+  ipcMain.handle('debug:log', async (_, event: string, payload?: unknown) => {
+    writeDebugLog(event, payload)
+    return { ok: true }
+  })
+
+  ipcMain.handle('debug:getLogPath', async () => {
+    return getDebugLogPath()
   })
 }

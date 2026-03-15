@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useDemoStore, usePlaybackStore } from '../stores'
-import { loadRoundData } from '../controls/RoundSelector'
+import { loadRoundData, preloadRoundsSilently, prewarmRoundsForInstantOpen, stopRoundPreload } from '../controls/RoundSelector'
 import { clearCache } from '../roundCache'
 
 export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
@@ -8,14 +8,23 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
     demos, selectedDemo, setSelectedDemo,
     setPlayers, setRounds, isLoading, setLoading,
     parseProgress, addParseProgress, clearParseProgress,
-    preloadTotal, preloadDone, preloadActive, setPreload,
-    refreshDemos
+    setRoundPreload, refreshDemos
   } = useDemoStore()
 
   const { setRound } = usePlaybackStore()
 
   const [showProgress, setShowProgress] = useState(false)
   const [posProgress, setPosProgress] = useState(0)  // 0-100
+
+  const handleCopyDebugLogPath = async () => {
+    try {
+      const path = await window.electronAPI.getDebugLogPath()
+      await navigator.clipboard.writeText(path)
+      alert(`Debug-logipolku kopioitu leikepöydälle:\n${path}`)
+    } catch {
+      alert('Debug-logipolun kopiointi epäonnistui')
+    }
+  }
 
   const handleOpenDemo = async () => {
     const paths = await window.electronAPI.openDemoDialog()
@@ -51,9 +60,12 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
   }
 
   const handleSelectDemo = async (demo: typeof demos[0]) => {
+    stopRoundPreload()
+    window.electronAPI.debugLog('demo.select', { demoId: demo.id, map: demo.map_name }).catch(() => {})
     setSelectedDemo(demo)
     setLoading(true)
     clearCache()  // Tyhjennä vanha demo pois
+    setRoundPreload(0, 0, false)
     try {
       const [players, rounds] = await Promise.all([
         window.electronAPI.getPlayers(demo.id),
@@ -62,25 +74,27 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
       setPlayers(players)
       setRounds(rounds)
 
-      const firstRound = rounds.length > 0 ? rounds[0].round_num : 0
+      const playableRounds = rounds.filter((r: any) => !r.is_knife && r.round_num > 0)
+      const firstRound = playableRounds.length > 0 ? playableRounds[0].round_num : (rounds.length > 0 ? rounds[0].round_num : 0)
       setRound(firstRound)
 
       // Lataa ensimmäinen kierros heti
       await loadRoundData(demo.id, firstRound)
+
+      // Esilataa 3 ensimmäistä kierrosta saman variantin cachena "instant" round switchiin.
+      const firstThree = playableRounds.slice(0, 3).map((r: any) => r.round_num).filter((n: number) => n !== firstRound)
+      prewarmRoundsForInstantOpen(demo.id, firstThree).catch(() => {})
+
+      // Käynnistä hiljainen taustacache kaikille muille kierroksille.
+      const prewarmedSet = new Set<number>(firstThree)
+      const roundNums = playableRounds
+        .map((r: any) => r.round_num)
+        .filter((roundNum: number) => !prewarmedSet.has(roundNum))
+      preloadRoundsSilently(demo.id, roundNums, firstRound).catch(() => {})
+
       onSelect?.()
       setLoading(false)
 
-      // Preload kaikki muut kierrokset taustalla — tallennetaan suoraan renderer-cacheen
-      const allRoundNums = rounds.map((r: any) => r.round_num)
-      setPreload(allRoundNums.length, 1, true)
-
-      const unsub = window.electronAPI.onPreloadProgress(({ done, total, complete }) => {
-        setPreload(total, done, !complete)
-        if (complete) unsub()
-      })
-
-      window.electronAPI.preloadAllRounds(demo.id, allRoundNums)
-        .catch(() => { setPreload(0, 0, false) })
 
     } catch(e) {
       setLoading(false)
@@ -101,7 +115,16 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
       <div className="px-3 pt-3 pb-2 border-b border-cs-border">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[10px] font-semibold uppercase tracking-widest text-cs-muted">Demot</span>
-          <span className="text-[10px] text-cs-muted bg-white/5 rounded px-1.5 py-0.5">{demos.length}</span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleCopyDebugLogPath}
+              className="text-[10px] text-cs-muted bg-white/5 rounded px-1.5 py-0.5 hover:bg-white/10"
+              title="Kopioi debug-login tiedostopolku"
+            >
+              Log path
+            </button>
+            <span className="text-[10px] text-cs-muted bg-white/5 rounded px-1.5 py-0.5">{demos.length}</span>
+          </div>
         </div>
         <button
           onClick={handleOpenDemo}
