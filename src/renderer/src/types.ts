@@ -21,7 +21,7 @@ declare global {
       getSmokeEffects: (demoId: number, roundNum: number) => Promise<SmokeEffect[]>
       getBombEvents: (demoId: number, roundNum: number) => Promise<BombEvent[]>
       getShotsFired: (demoId: number, roundNum: number) => Promise<Shot[]>
-      loadRoundAll:  (demoId: number, roundNum: number) => Promise<{
+      loadRoundAll:  (demoId: number, roundNum: number, options?: { includeKills?: boolean; includeSmokes?: boolean; includeBomb?: boolean; includeShots?: boolean; includeGrenades?: boolean; includeTrajectories?: boolean }) => Promise<{
         positions:    Position[]
         kills:        Kill[]
         grenades:     Grenade[]
@@ -31,11 +31,13 @@ declare global {
         flash:        FlashEvent[]
         infernoFires: InfernoFirePoint[]
         shots:        Shot[]
+        damage:       DamageEvent[]
       }>
-      preloadAllRounds: (demoId: number, roundNums: number[]) => Promise<{ done: number; total: number }>
-      onPreloadProgress: (cb: (data: { done: number; total: number; roundNum: number | null; complete?: boolean; data?: any }) => void) => () => void
+      getCumulativeStats: (demoId: number, upToRound: number) => Promise<{ kills: any[]; damage: any[]; flash: any[] }>
       getFlashEvents: (demoId: number, roundNum: number) => Promise<FlashEvent[]>
       getHeatmapPositions: (demoId: number, steamId?: string) => Promise<HeatmapPoint[]>
+      debugLog: (event: string, payload?: unknown) => Promise<{ ok: boolean }>
+      getDebugLogPath: () => Promise<string>
 
       minimizeWindow: () => void
       maximizeWindow: () => void
@@ -152,7 +154,7 @@ export interface Grenade {
   round_num: number
   tick_thrown: number
   tick_detonated: number | null
-  thrower_steam_id: string
+  thrower_steam_id: string | null
   grenade_type: GrenadeType
   throw_x: number
   throw_y: number
@@ -160,7 +162,7 @@ export interface Grenade {
   detonate_x: number | null
   detonate_y: number | null
   detonate_z: number | null
-  thrower_name: string
+  thrower_name: string | null
 }
 
 export interface GrenadeTrajectoryPoint {
@@ -222,11 +224,12 @@ export interface FlashEvent {
   demo_id: number
   round_num: number
   tick: number
-  thrower_steam_id: string
+  thrower_steam_id: string | null
   blinded_steam_id: string
   flash_duration: number
-  thrower_name: string
-  blinded_name: string
+  match_quality?: string | null
+  thrower_name: string | null
+  blinded_name: string | null
 }
 
 // ── Karttakonfiguraatio ───────────────────────────────────────────────────────
