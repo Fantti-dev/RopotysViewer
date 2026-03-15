@@ -3,25 +3,12 @@ import { getCachedRound, setCachedRound } from '../roundCache'
 
 export const KNIFE_ROUND = -1  // varattu myöhempää käyttöä varten
 
-let activeRequestId = 0
+let queuedRound: { demoId: number; roundNum: number } | null = null
+let loadWorker: Promise<void> | null = null
 
-
-function getRoundLoadOptions() {
-  const layers = useLayerStore.getState()
-  return {
-    includeKills: layers.kills || layers.killLines,
-    includeSmokes: layers.smokes,
-    includeBomb: layers.bomb,
-    includeShots: layers.shots,
-  }
-}
-
-function optionsVariant(options: ReturnType<typeof getRoundLoadOptions>) {
-  return `${options.includeKills ? 1 : 0}${options.includeSmokes ? 1 : 0}${options.includeBomb ? 1 : 0}${options.includeShots ? 1 : 0}`
-}
-
-export async function loadRoundData(demoId: number, roundNum: number) {
-  const requestId = ++activeRequestId
+async function loadRoundDataNow(demoId: number, roundNum: number) {
+  const t0 = performance.now()
+  const rounds = useDemoStore.getState().rounds
 
   const rounds = useDemoStore.getState().rounds
   const options = getRoundLoadOptions()
@@ -39,8 +26,32 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   }
 
   const roundInfo = rounds.find(r => r.round_num === roundNum)
-  setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick, variant)
-  applyRoundData(getCachedRound(demoId, roundNum, variant)!)
+  setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick)
+  applyRoundData(getCachedRound(demoId, roundNum)!)
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[loadRound] round=${roundNum} ${(performance.now() - t0).toFixed(0)}ms`)
+  }
+}
+
+export async function loadRoundData(demoId: number, roundNum: number) {
+  queuedRound = { demoId, roundNum }
+
+  if (loadWorker) {
+    return loadWorker
+  }
+
+  loadWorker = (async () => {
+    while (queuedRound) {
+      const target = queuedRound
+      queuedRound = null
+      await loadRoundDataNow(target.demoId, target.roundNum)
+    }
+  })().finally(() => {
+    loadWorker = null
+  })
+
+  return loadWorker
 }
 
 function applyRoundData(data: ReturnType<typeof getCachedRound>) {
