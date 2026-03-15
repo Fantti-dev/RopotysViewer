@@ -74,19 +74,37 @@ interface RoundCache {
 }
 
 function buildDamageDoneSummary(damageRows: any[]) {
-  const byPlayer = new Map<string, { steamId: string; totalDamage: number; utilDamage: number; hits: number }>()
+  const byPlayerVictim = new Map<string, { steamId: string; victimId: string; totalDamage: number; utilDamage: number; hits: number }>()
 
   for (const row of damageRows) {
     const steamId = String(row.attacker_steam_id ?? '')
+    const victimId = String(row.victim_steam_id ?? '')
     if (!steamId) continue
+
+    const attackerTeam = String(row.attacker_team ?? '')
+    const victimTeam = String(row.victim_team ?? '')
+    if (attackerTeam && victimTeam && attackerTeam === victimTeam) continue
+
     const damage = Number(row.damage ?? 0)
     const weapon = String(row.weapon ?? '')
     const isUtility = ['hegrenade', 'molotov', 'incgrenade', 'inferno'].some((kind) => weapon.includes(kind))
-    const prev = byPlayer.get(steamId) ?? { steamId, totalDamage: 0, utilDamage: 0, hits: 0 }
+    const key = `${steamId}:${victimId}`
+    const prev = byPlayerVictim.get(key) ?? { steamId, victimId, totalDamage: 0, utilDamage: 0, hits: 0 }
     prev.totalDamage += damage
     prev.hits += 1
     if (isUtility) prev.utilDamage += damage
-    byPlayer.set(steamId, prev)
+    byPlayerVictim.set(key, prev)
+  }
+
+  const byPlayer = new Map<string, { steamId: string; totalDamage: number; utilDamage: number; hits: number }>()
+  for (const row of byPlayerVictim.values()) {
+    const cappedTotal = Math.min(100, row.totalDamage)
+    const cappedUtil = Math.min(cappedTotal, row.utilDamage)
+    const prev = byPlayer.get(row.steamId) ?? { steamId: row.steamId, totalDamage: 0, utilDamage: 0, hits: 0 }
+    prev.totalDamage += cappedTotal
+    prev.utilDamage += cappedUtil
+    prev.hits += row.hits
+    byPlayer.set(row.steamId, prev)
   }
 
   return Array.from(byPlayer.values()).sort((a, b) => b.totalDamage - a.totalDamage)
@@ -262,7 +280,7 @@ async function loadRoundDataUncached(demoId: number, roundNum: number, options: 
       includeShots ? sqlRound(`SELECT sf.*, p.name AS player_name FROM shots_fired sf LEFT JOIN players p ON p.steam_id=sf.steam_id AND p.demo_id=sf.demo_id WHERE sf.demo_id=@demoId AND sf.round_num=@roundNum ORDER BY sf.tick`) : Promise.resolve([]),
       includeTrajectories ? runPy(join(appRoot,'python','read_trajectories.py'), join(appRoot,'demos',`${demoId}_trajectories.parquet`),  String(demoId), String(roundNum)) : Promise.resolve([]),
       includeSmokes ? runPy(join(appRoot,'python','read_inferno_fires.py'),join(appRoot,'demos',`${demoId}_inferno_fires.parquet`), String(demoId), String(roundNum)) : Promise.resolve([]),
-      includeKills ? sqlRound(`SELECT d.*, pa.name AS attacker_name, pv.name AS victim_name FROM damage d JOIN rounds r ON r.demo_id=d.demo_id AND r.round_num=d.round_num LEFT JOIN rounds rn ON rn.demo_id=r.demo_id AND rn.round_num=r.round_num+1 LEFT JOIN players pa ON pa.steam_id=d.attacker_steam_id AND pa.demo_id=d.demo_id LEFT JOIN players pv ON pv.steam_id=d.victim_steam_id AND pv.demo_id=d.demo_id WHERE d.demo_id=@demoId AND d.round_num=@roundNum AND d.tick >= r.start_tick AND d.tick < ISNULL(rn.start_tick, 2147483647) ORDER BY d.tick`) : Promise.resolve([]),
+      includeKills ? sqlRound(`SELECT d.*, pa.name AS attacker_name, pv.name AS victim_name, pa.team_start AS attacker_team, pv.team_start AS victim_team FROM damage d JOIN rounds r ON r.demo_id=d.demo_id AND r.round_num=d.round_num LEFT JOIN rounds rn ON rn.demo_id=r.demo_id AND rn.round_num=r.round_num+1 LEFT JOIN players pa ON pa.steam_id=d.attacker_steam_id AND pa.demo_id=d.demo_id LEFT JOIN players pv ON pv.steam_id=d.victim_steam_id AND pv.demo_id=d.demo_id WHERE d.demo_id=@demoId AND d.round_num=@roundNum AND d.tick >= r.start_tick AND d.tick < ISNULL(rn.start_tick, 2147483647) ORDER BY d.tick`) : Promise.resolve([]),
     ])
 
   const roundData: RoundCache = { positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots, damage }

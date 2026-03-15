@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
@@ -16,6 +16,7 @@ const TRAIL_TICKS     = 24
 const BOMB_TIMER_S    = 40
 const BLOOM_TICKS     = 128
 const SHOT_FADE_TICKS = 48
+const HITMARK_FADE_TICKS = 64
 const BLAST_TICKS     = 48
 const MOLOTOV_TICKS   = 384
 
@@ -69,7 +70,7 @@ export default function Viewer3D({ onClose }: Props) {
   const {
     positions, kills, grenades, grenadeTrajectories,
     smokeEffects, bombEvents, flashEvents, infernoFires, shots,
-    currentTick, allTicks, currentRound, tickProgress,
+    damage, currentTick, allTicks, currentRound, tickProgress,
   } = usePlaybackStore()
   const { selectedDemo, players, rounds } = useDemoStore()
   const L = useLayerStore()
@@ -93,6 +94,54 @@ export default function Viewer3D({ onClose }: Props) {
 
   const teamMap = Object.fromEntries(players.map(p => [String(p.steam_id), p.team_start]))
   const nameMap = Object.fromEntries(players.map(p => [String(p.steam_id), p.name]))
+
+  const tickToIndex = useMemo(() => {
+    const m = new Map<number, number>()
+    allTicks.forEach((t, i) => m.set(t, i))
+    return m
+  }, [allTicks])
+
+  const posBySteam = useMemo(() => {
+    const bySteam: Record<string, typeof positions> = {}
+    for (const p of positions) {
+      const sid = String(p.steam_id)
+      ;(bySteam[sid] ??= []).push(p)
+    }
+    for (const sid of Object.keys(bySteam)) {
+      bySteam[sid].sort((a, b) => a.tick - b.tick)
+    }
+    return bySteam
+  }, [positions])
+
+  const trajByGrenade = useMemo(() => {
+    const map: Record<number, typeof grenadeTrajectories> = {}
+    for (const pt of grenadeTrajectories) {
+      ;(map[pt.grenade_id] ??= []).push(pt)
+    }
+    for (const id of Object.keys(map)) {
+      map[Number(id)].sort((a, b) => a.tick - b.tick)
+    }
+    return map
+  }, [grenadeTrajectories])
+
+  const findPosAtTick = (steamId: string, tick: number) => {
+    const track = posBySteam[steamId]
+    if (!track || track.length === 0) return null
+    let lo = 0
+    let hi = track.length - 1
+    let best: any = null
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      const row = track[mid]
+      if (row.tick <= tick) {
+        best = row
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    return best
+  }
 
   // ── Three.js init ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -438,7 +487,7 @@ export default function Viewer3D({ onClose }: Props) {
     dynGroup.clear()
     const add = (o: THREE.Object3D) => dynGroup.add(o)
 
-    const tickIdx        = allTicks.indexOf(localTick)
+    const tickIdx        = tickToIndex.get(localTick) ?? 0
     const nextTick       = allTicks[tickIdx + 1] ?? localTick
     const roundInfo      = rounds.find(r => r.round_num === currentRound)
     const roundStartTick = roundInfo?.start_tick ?? (allTicks[0] ?? 0)
@@ -462,16 +511,16 @@ export default function Viewer3D({ onClose }: Props) {
     if (L.playerTrails) {
       const trailSet = new Set(allTicks.slice(Math.max(0, tickIdx - TRAIL_TICKS), tickIdx + 1))
       const byPlayer: Record<string, typeof positions> = {}
-      positions
-        .filter(p => trailSet.has(p.tick) && (p.is_alive === true || (p.is_alive as any) === 1))
-        .forEach(p => { (byPlayer[String(p.steam_id)] ??= []).push(p) })
+      for (const [sid, track] of Object.entries(posBySteam)) {
+        const filtered = track.filter(p => trailSet.has(p.tick) && (p.is_alive === true || (p.is_alive as any) === 1))
+        if (filtered.length) byPlayer[sid] = filtered
+      }
       for (const [sid, trail] of Object.entries(byPlayer)) {
         if (trail.length < 2) continue
-        const sorted = [...trail].sort((a, b) => a.tick - b.tick)
         const key    = teamMap[sid] === 'CT' ? 'trail_CT' : 'trail_T'
-        for (let i = 1; i < sorted.length; i++) {
-          const a = c(sorted[i-1].x, sorted[i-1].y, sorted[i-1].z)
-          const b = c(sorted[i].x,   sorted[i].y,   sorted[i].z)
+        for (let i = 1; i < trail.length; i++) {
+          const a = c(trail[i-1].x, trail[i-1].y, trail[i-1].z)
+          const b = c(trail[i].x,   trail[i].y,   trail[i].z)
           pushLine(key, a.x,a.y,a.z, b.x,b.y,b.z)
         }
       }
@@ -497,13 +546,10 @@ export default function Viewer3D({ onClose }: Props) {
 
     // ── Kranaatit ─────────────────────────────────────────────────────────────
     if (L.grenades) {
-      const trajMap: Record<number, typeof grenadeTrajectories> = {}
-      grenadeTrajectories.forEach(pt => { (trajMap[pt.grenade_id] ??= []).push(pt) })
-
       grenades.forEach(gr => {
         if (gr.tick_thrown > localTick) return
         const color     = GREN[gr.grenade_type] ?? 0xffffff
-        const allTraj   = (trajMap[gr.id] ?? []).sort((a, b) => a.tick - b.tick)
+        const allTraj   = trajByGrenade[gr.id] ?? []
         const traj      = allTraj.filter(pt => pt.tick <= localTick)
         const isMolotov = gr.grenade_type === 'molotov' || gr.grenade_type === 'incgrenade'
         const isHE      = gr.grenade_type === 'hegrenade'
@@ -616,11 +662,40 @@ export default function Viewer3D({ onClose }: Props) {
         .forEach(shot => {
           const team  = teamMap[String(shot.steam_id)]
           const key   = team === 'CT' ? 'CT_shot' : 'T_shot'
-          const shooterPos = positions.find(p => String(p.steam_id)===String(shot.steam_id) && p.tick===shot.tick)
+          const shooterPos = findPosAtTick(String(shot.steam_id), shot.tick)
           const eyeH  = (Boolean(shooterPos?.is_ducking) ? EYE_CROUCH : EYE_HEIGHT) * S
           const from  = c(shot.x, shot.y, shot.z); from.y += eyeH
           const to    = from.clone().add(shotDir(shot.yaw??0, shot.pitch??0, 500*S))
           pushLine(key, from.x,from.y,from.z, to.x,to.y,to.z)
+        })
+    }
+
+    // ── Hitmarks (damage impact points in 3D) ───────────────────────────────
+    if (L.shots) {
+      damage
+        .filter(d => d.tick >= roundStartTick && d.tick <= localTick && localTick - d.tick <= HITMARK_FADE_TICKS)
+        .forEach(d => {
+          const victimPos = findPosAtTick(String(d.victim_steam_id), d.tick)
+          if (!victimPos) return
+          const pos = c(victimPos.x, victimPos.y, victimPos.z)
+          const age = localTick - d.tick
+          const alpha = 1 - age / HITMARK_FADE_TICKS
+          const size = (4 + (d.damage ?? 0) * 0.04) * S
+          const mat = new THREE.MeshBasicMaterial({
+            color: d.damage && d.damage >= 80 ? 0xef4444 : 0xfff59d,
+            transparent: true,
+            opacity: Math.max(0.15, alpha),
+            depthWrite: false,
+          })
+          const a = new THREE.Mesh(new THREE.PlaneGeometry(size, size * 0.15), mat)
+          const b = new THREE.Mesh(new THREE.PlaneGeometry(size, size * 0.15), mat)
+          a.position.set(pos.x, pos.y + (EYE_HEIGHT * 0.7 * S), pos.z)
+          b.position.copy(a.position)
+          a.lookAt(cameraRef.current?.position ?? new THREE.Vector3())
+          b.lookAt(cameraRef.current?.position ?? new THREE.Vector3())
+          b.rotateZ(Math.PI / 2)
+          add(a)
+          add(b)
         })
     }
 
@@ -652,15 +727,36 @@ export default function Viewer3D({ onClose }: Props) {
         const origin = c(wx, wy, wz)
         const height = (crouching ? 36 : 72) * S
 
-        // Yksinkertainen sylinteri — 1 draw call, ei geometrian luontia
-        const mesh = new THREE.Mesh(
-          crouching
-            ? new THREE.CylinderGeometry(8*S, 8*S, height, 8)
-            : pre.playerGeo,
+        // Player-like model: torso + head + legs (still lightweight)
+        const bodyGroup = new THREE.Group()
+        const torsoH = (crouching ? 22 : 30) * S
+        const legH = (crouching ? 12 : 22) * S
+        const legGap = 2.2 * S
+
+        const torso = new THREE.Mesh(
+          new THREE.CapsuleGeometry(6.5 * S, torsoH, 3, 6),
           pre.playerMats[matKey]
         )
-        mesh.position.set(origin.x, origin.y + height/2, origin.z)
-        add(mesh)
+        torso.position.set(0, legH + torsoH * 0.5, 0)
+        bodyGroup.add(torso)
+
+        const head = new THREE.Mesh(
+          new THREE.SphereGeometry(4.2 * S, 8, 6),
+          new THREE.MeshBasicMaterial({ color: alive ? 0xe5e7eb : 0x6b7280 })
+        )
+        head.position.set(0, legH + torsoH + 5.5 * S, 0)
+        bodyGroup.add(head)
+
+        const legMat = new THREE.MeshBasicMaterial({ color: alive ? 0x1f2937 : 0x3f3f46 })
+        const legL = new THREE.Mesh(new THREE.CylinderGeometry(1.8 * S, 2.2 * S, legH, 6), legMat)
+        const legR = new THREE.Mesh(new THREE.CylinderGeometry(1.8 * S, 2.2 * S, legH, 6), legMat)
+        legL.position.set(-legGap, legH * 0.5, 0)
+        legR.position.set(legGap, legH * 0.5, 0)
+        bodyGroup.add(legL)
+        bodyGroup.add(legR)
+
+        bodyGroup.position.set(origin.x, origin.y, origin.z)
+        add(bodyGroup)
 
         if (alive) {
           // Suuntanuoli — käytetään quaternionia jotta vastaa shotDir-suuntaa
@@ -692,7 +788,7 @@ export default function Viewer3D({ onClose }: Props) {
 
   }, [localTick, tickProgress, currentRound, L, selectedDemo, positions, kills, grenades,
       grenadeTrajectories, smokeEffects, bombEvents, flashEvents, infernoFires, shots,
-      allTicks, players, rounds, teamMap, nameMap])
+      allTicks, players, rounds, teamMap, nameMap, tickToIndex, posBySteam, trajByGrenade, damage])
 
   // ── Playback ───────────────────────────────────────────────────────────────
   useEffect(() => { playRef.current = playing }, [playing])

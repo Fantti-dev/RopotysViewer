@@ -6,6 +6,7 @@ export const KNIFE_ROUND = -1  // varattu myöhempää käyttöä varten
 let activeRequestId = 0
 let preloadSessionId = 0
 const inFlightRoundLoads = new Map<string, Promise<any>>()
+let lastInteractiveRoundLoadAt = 0
 
 
 function getRoundLoadOptions() {
@@ -69,6 +70,19 @@ function setRoundPreloadState(total: number, done: number, active: boolean) {
 
 
 async function waitPreloadSlot() {
+  const now = performance.now()
+  const sinceInteractiveLoad = now - lastInteractiveRoundLoadAt
+  if (sinceInteractiveLoad < 2500) {
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    return
+  }
+
+  const hasInteractiveInFlight = Array.from(inFlightRoundLoads.keys()).some((key) => key.endsWith(':1111'))
+  if (hasInteractiveInFlight) {
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    return
+  }
+
   // While playback is active, pace background preloads to reduce CPU/IO bursts.
   const isPlaying = usePlaybackStore.getState().isPlaying
   if (isPlaying) {
@@ -157,6 +171,7 @@ export async function prewarmRoundsForInstantOpen(demoId: number, roundNums: num
 
 export async function loadRoundData(demoId: number, roundNum: number) {
   const startedAt = performance.now()
+  lastInteractiveRoundLoadAt = startedAt
   const requestId = ++activeRequestId
   const wasPlaying = usePlaybackStore.getState().isPlaying
 
@@ -164,16 +179,49 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   const options = getRoundLoadOptions()
   const variant = optionsVariant(options)
   const cached = getCachedRound(demoId, roundNum, variant)
+
+  const summarizeDamageDone = (rows: any[]) => {
+    const demoPlayers = useDemoStore.getState().players
+    const teamBySteam = new Map<string, string>(demoPlayers.map((p) => [String(p.steam_id), p.team_start]))
+    const byAttackerVictim = new Map<string, { totalDamage: number; utilDamage: number }>()
+
+    for (const row of rows) {
+      const attacker = String(row.attacker_steam_id ?? '')
+      const victim = String(row.victim_steam_id ?? '')
+      if (!attacker) continue
+
+      const attackerTeam = String(row.attacker_team ?? teamBySteam.get(attacker) ?? '')
+      const victimTeam = String(row.victim_team ?? teamBySteam.get(victim) ?? '')
+      if (attackerTeam && victimTeam && attackerTeam === victimTeam) continue
+
+      const key = `${attacker}:${victim}`
+      const prev = byAttackerVictim.get(key) ?? { totalDamage: 0, utilDamage: 0 }
+      const damage = Number(row.damage ?? 0)
+      const weapon = String(row.weapon ?? '')
+      const isUtility = ['hegrenade', 'molotov', 'incgrenade', 'inferno'].some((kind) => weapon.includes(kind))
+      prev.totalDamage += damage
+      if (isUtility) prev.utilDamage += damage
+      byAttackerVictim.set(key, prev)
+    }
+
+    const byAttacker = new Map<string, { steamId: string; totalDamage: number; utilDamage: number }>()
+    for (const [key, totals] of byAttackerVictim.entries()) {
+      const attacker = key.split(':', 1)[0]
+      const cappedTotal = Math.min(100, totals.totalDamage)
+      const cappedUtil = Math.min(cappedTotal, totals.utilDamage)
+      const prev = byAttacker.get(attacker) ?? { steamId: attacker, totalDamage: 0, utilDamage: 0 }
+      prev.totalDamage += cappedTotal
+      prev.utilDamage += cappedUtil
+      byAttacker.set(attacker, prev)
+    }
+
+    return Array.from(byAttacker.values()).sort((a, b) => b.totalDamage - a.totalDamage)
+  }
+
   if (cached) {
     applyRoundData(cached, wasPlaying, roundNum)
     const durationMs = Math.round(performance.now() - startedAt)
-    const damageDoneByPlayer = Array.from(cached.damage.reduce((acc, row) => {
-      const key = String(row.attacker_steam_id ?? '')
-      if (!key) return acc
-      acc.set(key, (acc.get(key) ?? 0) + Number(row.damage ?? 0))
-      return acc
-    }, new Map<string, number>()).entries()).map(([steamId, totalDamage]) => ({ steamId, totalDamage }))
-      .sort((a, b) => b.totalDamage - a.totalDamage)
+    const damageDoneByPlayer = summarizeDamageDone(cached.damage)
 
     window.electronAPI.debugLog('round.load.renderer.cache_hit', {
       demoId,
@@ -203,13 +251,7 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   applyRoundData(getCachedRound(demoId, roundNum, variant)!, wasPlaying, roundNum)
   const durationMs = Math.round(performance.now() - startedAt)
   const applied = getCachedRound(demoId, roundNum, variant)
-  const damageDoneByPlayer = Array.from((applied?.damage ?? []).reduce((acc, row) => {
-    const key = String(row.attacker_steam_id ?? '')
-    if (!key) return acc
-    acc.set(key, (acc.get(key) ?? 0) + Number(row.damage ?? 0))
-    return acc
-  }, new Map<string, number>()).entries()).map(([steamId, totalDamage]) => ({ steamId, totalDamage }))
-    .sort((a, b) => b.totalDamage - a.totalDamage)
+  const damageDoneByPlayer = summarizeDamageDone(applied?.damage ?? [])
 
   window.electronAPI.debugLog('round.load.renderer.fetch', {
     demoId,
