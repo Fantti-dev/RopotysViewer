@@ -427,16 +427,20 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
         log(f"    after dropna: {len(traj_raw)}")
 
         type_map = {
+            # Source 2 projectile/entity naming variants (demoparser updates may expose either)
+            "CBaseCSGrenadeProjectile":  None,
             "CSmokeGrenade":             "smokegrenade",
             "CSmokeGrenadeProjectile":   "smokegrenade",
             "CFlashbang":                "flashbang",
             "CFlashbangProjectile":      "flashbang",
             "CHEGrenade":                "hegrenade",
             "CHEGrenadeProjectile":      "hegrenade",
+            "C_HEGrenadeProjectile":     "hegrenade",
             "CMolotovGrenade":           "molotov",
             "CMolotovProjectile":        "molotov",
             "CIncendiaryGrenade":        "incgrenade",
             "CIncendiaryGrenadeProjectile": "incgrenade",
+            "CInferno":                  "molotov",
             "CDecoyGrenade":             "decoy",
             "CDecoyProjectile":          "decoy",
         }
@@ -962,6 +966,9 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
     try:
         import pandas as pd
 
+        FLASH_WINDOW_TICKS = 160
+        BLIND_EVENT_MATCH_WINDOW = 96
+
         cursor.execute("""
             SELECT g.tick_detonated, g.thrower_steam_id
             FROM grenades g
@@ -976,6 +983,24 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
 
         cursor.execute("SELECT steam_id, team_start FROM players WHERE demo_id=?", demo_id)
         player_team = {ss(sid): ss(team) for sid, team in cursor.fetchall()}
+
+        # Preferred thrower source: player_blind event (intent/result pair), fallback to detonation matching.
+        try:
+            blind_events = parser.parse_event("player_blind", player=["attacker_steamid"])
+        except Exception:
+            blind_events = pd.DataFrame()
+
+        blind_rows = []
+        if not blind_events.empty:
+            for _, row in blind_events.iterrows():
+                blinded_id = ss(row.get("user_steamid")) or None
+                if not blinded_id:
+                    continue
+                blind_rows.append((
+                    ii(row.get("tick")),
+                    blinded_id,
+                    ss(row.get("attacker_steamid")) or None
+                ))
 
         try:
             flash_ticks = parser.parse_ticks(["flash_duration"], players=None)
@@ -1005,10 +1030,23 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
                         thrower_id = None
                         best_dist = 10**9
 
+                        for b_tick, b_blinded, b_thrower in blind_rows:
+                            if b_blinded != blinded_id:
+                                continue
+                            dist = abs(b_tick - tick)
+                            if dist > BLIND_EVENT_MATCH_WINDOW:
+                                continue
+                            if dist < best_dist and b_thrower:
+                                best_dist = dist
+                                thrower_id = b_thrower
+
+                        # Fallback: nearest flash detonation in window.
+                        if not thrower_id:
+                            best_dist = 10**9
                         for det_tick, det_thrower in flash_detonations:
                             # Blind should happen near detonation; tolerate slight delay/lead.
                             dist = abs(det_tick - tick)
-                            if dist > 160:
+                            if dist > FLASH_WINDOW_TICKS:
                                 continue
                             if dist < best_dist:
                                 best_dist = dist
@@ -1031,7 +1069,7 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
                             thrower_id,
                             blinded_id,
                             cur,
-                            ("detonation_window" if thrower_id else "unmatched")
+                            ("player_blind_event" if thrower_id and best_dist <= BLIND_EVENT_MATCH_WINDOW else "detonation_window" if thrower_id else "unmatched")
                         ))
 
                     prev_val = cur

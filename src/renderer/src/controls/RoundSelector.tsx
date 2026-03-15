@@ -39,6 +39,15 @@ function setRoundPreloadState(total: number, done: number, active: boolean) {
 }
 
 
+async function waitPreloadSlot() {
+  // While playback is active, pace background preloads to reduce CPU/IO bursts.
+  const isPlaying = usePlaybackStore.getState().isPlaying
+  if (isPlaying) {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
 
 export function stopRoundPreload() {
   preloadSessionId++
@@ -55,6 +64,9 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
   setRoundPreloadState(total, 0, total > 0)
 
   for (const roundNum of targets) {
+    if (sessionId !== preloadSessionId) return
+
+    await waitPreloadSlot()
     if (sessionId !== preloadSessionId) return
 
     if (getCachedRound(demoId, roundNum, FULL_PRELOAD_VARIANT)) {
@@ -77,20 +89,21 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
     done++
     setRoundPreloadState(total, done, done < total)
 
-    // Yield back to UI/event loop between rounds.
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Adaptive pacing also after each completed preload round.
+    await waitPreloadSlot()
   }
 }
 
 export async function loadRoundData(demoId: number, roundNum: number) {
   const requestId = ++activeRequestId
+  const wasPlaying = usePlaybackStore.getState().isPlaying
 
   const rounds = useDemoStore.getState().rounds
   const options = getRoundLoadOptions()
   const variant = optionsVariant(options)
-  const cached = getCachedRound(demoId, roundNum, variant) ?? getCachedRound(demoId, roundNum, FULL_PRELOAD_VARIANT)
+  const cached = getCachedRound(demoId, roundNum, variant)
   if (cached) {
-    applyRoundData(cached)
+    applyRoundData(cached, wasPlaying)
     return
   }
 
@@ -102,10 +115,10 @@ export async function loadRoundData(demoId: number, roundNum: number) {
 
   const roundInfo = rounds.find(r => r.round_num === roundNum)
   setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick, variant)
-  applyRoundData(getCachedRound(demoId, roundNum, variant)!)
+  applyRoundData(getCachedRound(demoId, roundNum, variant)!, wasPlaying)
 }
 
-function applyRoundData(data: ReturnType<typeof getCachedRound>) {
+function applyRoundData(data: ReturnType<typeof getCachedRound>, keepPlaying: boolean) {
   if (!data) return
   const store = usePlaybackStore.getState()
   store.setAllTicks(data.ticks)
@@ -119,7 +132,7 @@ function applyRoundData(data: ReturnType<typeof getCachedRound>) {
   store.setInfernoFires(data.infernoFires)
   store.setShots(data.shots)
   store.setDamage(data.damage)
-  store.setPlaying(false)
+  store.setPlaying(keepPlaying)
 }
 
 export default function RoundSelector() {

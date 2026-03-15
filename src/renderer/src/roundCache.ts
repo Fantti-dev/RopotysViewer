@@ -93,14 +93,14 @@ function buildCachedRound(raw: any, startTick?: number): RoundData {
   return {
     ticks,
     positions,
-    kills: raw.kills,
-    grenades: raw.grenades,
-    trajectories: raw.trajectories,
-    smokes: raw.smokes,
-    bomb: raw.bomb,
-    flash: raw.flash,
-    infernoFires: raw.infernoFires,
-    shots: raw.shots,
+    kills: raw.kills ?? [],
+    grenades: raw.grenades ?? [],
+    trajectories: raw.trajectories ?? [],
+    smokes: raw.smokes ?? [],
+    bomb: raw.bomb ?? [],
+    flash: raw.flash ?? [],
+    infernoFires: raw.infernoFires ?? [],
+    shots: raw.shots ?? [],
     damage: raw.damage ?? []
   }
 }
