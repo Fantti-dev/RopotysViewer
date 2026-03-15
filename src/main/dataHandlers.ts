@@ -73,6 +73,103 @@ interface RoundCache {
   damage: any[]
 }
 
+function writeRoundEventLogs(demoId: number, roundNum: number, roundData: RoundCache) {
+  for (const shot of roundData.shots) {
+    writeDebugLog('event.shot_fired', {
+      demoId,
+      roundNum,
+      tick: shot.tick,
+      steamId: shot.steam_id,
+      weapon: shot.weapon,
+      x: shot.x,
+      y: shot.y,
+      z: shot.z,
+    })
+  }
+
+  for (const damage of roundData.damage) {
+    const weapon = String(damage.weapon ?? '')
+    const isUtility = ['hegrenade', 'molotov', 'incgrenade', 'inferno'].some((kind) => weapon.includes(kind))
+    writeDebugLog('event.damage', {
+      demoId,
+      roundNum,
+      tick: damage.tick,
+      attackerSteamId: damage.attacker_steam_id,
+      victimSteamId: damage.victim_steam_id,
+      weapon: damage.weapon,
+      damage: damage.damage,
+      armorDamage: damage.armor_damage,
+      healthAfter: damage.health_after,
+      hitgroup: damage.hitgroup,
+      isUtility,
+    })
+
+    if (isUtility) {
+      writeDebugLog('event.utility_damage', {
+        demoId,
+        roundNum,
+        tick: damage.tick,
+        attackerSteamId: damage.attacker_steam_id,
+        victimSteamId: damage.victim_steam_id,
+        weapon: damage.weapon,
+        damage: damage.damage,
+      })
+    }
+  }
+
+  for (const grenade of roundData.grenades) {
+    writeDebugLog('event.grenade_throw', {
+      demoId,
+      roundNum,
+      tickThrown: grenade.tick_thrown,
+      tickDetonated: grenade.tick_detonated,
+      throwerSteamId: grenade.thrower_steam_id,
+      grenadeType: grenade.grenade_type,
+      throw: { x: grenade.throw_x, y: grenade.throw_y, z: grenade.throw_z },
+      detonate: { x: grenade.detonate_x, y: grenade.detonate_y, z: grenade.detonate_z },
+    })
+  }
+
+  for (const flashEvent of roundData.flash) {
+    writeDebugLog('event.flash', {
+      demoId,
+      roundNum,
+      tick: flashEvent.tick,
+      throwerSteamId: flashEvent.thrower_steam_id,
+      blindedSteamId: flashEvent.blinded_steam_id,
+      flashDuration: flashEvent.flash_duration,
+      matchQuality: flashEvent.match_quality,
+    })
+  }
+}
+
+const roundDataCache = new Map<string, RoundCache>()
+const roundDataInFlight = new Map<string, Promise<RoundCache>>()
+const MAX_ROUND_CACHE_ENTRIES = 48
+
+function getRoundCacheKey(demoId: number, roundNum: number, options: RoundLoadOptions = {}) {
+  return [
+    demoId,
+    roundNum,
+    options.includeKills !== false ? 1 : 0,
+    options.includeSmokes !== false ? 1 : 0,
+    options.includeBomb !== false ? 1 : 0,
+    options.includeShots !== false ? 1 : 0,
+    options.includeGrenades !== false ? 1 : 0,
+    options.includeTrajectories !== false ? 1 : 0,
+  ].join(':')
+}
+
+function setRoundCacheValue(key: string, value: RoundCache) {
+  if (roundDataCache.has(key)) roundDataCache.delete(key)
+  roundDataCache.set(key, value)
+  while (roundDataCache.size > MAX_ROUND_CACHE_ENTRIES) {
+    const oldestKey = roundDataCache.keys().next().value
+    if (!oldestKey) break
+    roundDataCache.delete(oldestKey)
+  }
+}
+
 interface RoundDamageWindowDiagnostics {
   roundStartTick: number
   roundEndTick: number
@@ -120,6 +217,31 @@ async function fetchRoundDamageWindowDiagnostics(
 // ── Kierrosdatan lataus (ilman main-prosessin välimuistia) ───────────────────
 // Standalone funktio — käytettävissä sekä IPC-handlereissa että preloadissa
 async function loadRoundData(demoId: number, roundNum: number, options: RoundLoadOptions = {}): Promise<RoundCache> {
+  const cacheKey = getRoundCacheKey(demoId, roundNum, options)
+  const cached = roundDataCache.get(cacheKey)
+  if (cached) {
+    return cached
+  }
+
+  const inFlight = roundDataInFlight.get(cacheKey)
+  if (inFlight) {
+    return inFlight
+  }
+
+  const loadPromise = loadRoundDataUncached(demoId, roundNum, options)
+  roundDataInFlight.set(cacheKey, loadPromise)
+  try {
+    const loaded = await loadPromise
+    setRoundCacheValue(cacheKey, loaded)
+    return loaded
+  } finally {
+    if (roundDataInFlight.get(cacheKey) === loadPromise) {
+      roundDataInFlight.delete(cacheKey)
+    }
+  }
+}
+
+async function loadRoundDataUncached(demoId: number, roundNum: number, options: RoundLoadOptions = {}): Promise<RoundCache> {
   const startedAt = Date.now()
   writeDebugLog('round.load.main.start', { demoId, roundNum, options })
   const isDev     = process.env['ELECTRON_RENDERER_URL'] !== undefined
@@ -195,6 +317,10 @@ async function loadRoundData(demoId: number, roundNum: number, options: RoundLoa
     ])
 
   const roundData: RoundCache = { positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots, damage }
+  if (includeKills || includeShots || includeGrenades) {
+    writeRoundEventLogs(demoId, roundNum, roundData)
+  }
+
   writeDebugLog('round.load.main.complete', {
     demoId,
     roundNum,

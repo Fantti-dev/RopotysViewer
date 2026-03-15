@@ -72,7 +72,7 @@ async function waitPreloadSlot() {
   // While playback is active, pace background preloads to reduce CPU/IO bursts.
   const isPlaying = usePlaybackStore.getState().isPlaying
   if (isPlaying) {
-    await new Promise((resolve) => setTimeout(resolve, 250))
+    await new Promise((resolve) => setTimeout(resolve, 1000))
   } else {
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
