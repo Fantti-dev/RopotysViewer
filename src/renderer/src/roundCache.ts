@@ -23,11 +23,11 @@ export interface RoundData {
 // Module-tason Map — ei React-state, ei re-renderöintiä
 const cache = new Map<string, RoundData>()
 
-export function cacheKey(demoId: number, roundNum: number) {
-  return `${demoId}_${roundNum}`
+export function cacheKey(demoId: number, roundNum: number, variant = 'default') {
+  return `${demoId}_${roundNum}_${variant}`
 }
 
-export function setCachedRound(demoId: number, roundNum: number, raw: any, startTick?: number) {
+export function setCachedRound(demoId: number, roundNum: number, raw: any, startTick?: number, variant = "default") {
   // Leikkaa pois tikit ennen kierroksen virallista alkua (puukkokierros, lämmittely)
   const positions = startTick
     ? raw.positions.filter((p: any) => p.tick >= startTick)
@@ -36,7 +36,7 @@ export function setCachedRound(demoId: number, roundNum: number, raw: any, start
   const ticks = [...new Set(positions.map((p: any) => p.tick) as number[])]
     .sort((a, b) => a - b)
 
-  cache.set(cacheKey(demoId, roundNum), {
+  cache.set(cacheKey(demoId, roundNum, variant), {
     ticks,
     positions,
     kills:        raw.kills,
@@ -51,12 +51,12 @@ export function setCachedRound(demoId: number, roundNum: number, raw: any, start
   })
 }
 
-export function getCachedRound(demoId: number, roundNum: number): RoundData | undefined {
-  return cache.get(cacheKey(demoId, roundNum))
+export function getCachedRound(demoId: number, roundNum: number, variant = "default"): RoundData | undefined {
+  return cache.get(cacheKey(demoId, roundNum, variant))
 }
 
-export function hasCachedRound(demoId: number, roundNum: number): boolean {
-  return cache.has(cacheKey(demoId, roundNum))
+export function hasCachedRound(demoId: number, roundNum: number, variant = "default"): boolean {
+  return cache.has(cacheKey(demoId, roundNum, variant))
 }
 
 export function clearCache() {

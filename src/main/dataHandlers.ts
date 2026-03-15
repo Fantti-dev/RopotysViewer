@@ -81,18 +81,23 @@ async function loadRoundData(demoId: number, roundNum: number): Promise<RoundCac
     return r.recordset
   }
 
+  const includeKills = options.includeKills !== false
+  const includeSmokes = options.includeSmokes !== false
+  const includeBomb = options.includeBomb !== false
+  const includeShots = options.includeShots !== false
+
   const [positions, kills, grenades, smokes, bomb, flash, shots, trajectories, infernoFires, damage] =
     await Promise.all([
       runPy(join(appRoot,'python','read_positions.py'),    join(appRoot,'demos',`${demoId}_positions.parquet`),     String(roundNum)),
-      sqlRound(`SELECT k.*, pa.name AS attacker_name, pv.name AS victim_name, pas.name AS assister_name FROM kills k LEFT JOIN players pa ON pa.steam_id=k.attacker_steam_id AND pa.demo_id=k.demo_id LEFT JOIN players pv ON pv.steam_id=k.victim_steam_id AND pv.demo_id=k.demo_id LEFT JOIN players pas ON pas.steam_id=k.assister_steam_id AND pas.demo_id=k.demo_id WHERE k.demo_id=@demoId AND k.round_num=@roundNum ORDER BY k.tick`),
+      includeKills ? sqlRound(`SELECT k.*, pa.name AS attacker_name, pv.name AS victim_name, pas.name AS assister_name FROM kills k LEFT JOIN players pa ON pa.steam_id=k.attacker_steam_id AND pa.demo_id=k.demo_id LEFT JOIN players pv ON pv.steam_id=k.victim_steam_id AND pv.demo_id=k.demo_id LEFT JOIN players pas ON pas.steam_id=k.assister_steam_id AND pas.demo_id=k.demo_id WHERE k.demo_id=@demoId AND k.round_num=@roundNum ORDER BY k.tick`) : Promise.resolve([]),
       sqlRound(`SELECT g.*, p.name AS thrower_name FROM grenades g LEFT JOIN players p ON p.steam_id=g.thrower_steam_id AND p.demo_id=g.demo_id WHERE g.demo_id=@demoId AND g.round_num=@roundNum ORDER BY g.tick_thrown`),
-      sqlRound(`SELECT se.* FROM smoke_effects se INNER JOIN grenades g ON g.id=se.grenade_id WHERE g.demo_id=@demoId AND g.round_num=@roundNum ORDER BY se.start_tick`),
-      sqlRound(`SELECT be.*, p.name AS player_name FROM bomb_events be LEFT JOIN players p ON p.steam_id=be.player_steam_id AND p.demo_id=be.demo_id WHERE be.demo_id=@demoId AND be.round_num=@roundNum ORDER BY be.tick`),
-      sqlRound(`SELECT fe.*, pt.name AS thrower_name, pb.name AS blinded_name FROM flash_events fe LEFT JOIN players pt ON pt.steam_id=fe.thrower_steam_id AND pt.demo_id=fe.demo_id LEFT JOIN players pb ON pb.steam_id=fe.blinded_steam_id AND pb.demo_id=fe.demo_id WHERE fe.demo_id=@demoId AND fe.round_num=@roundNum ORDER BY fe.tick`),
-      sqlRound(`SELECT sf.*, p.name AS player_name FROM shots_fired sf LEFT JOIN players p ON p.steam_id=sf.steam_id AND p.demo_id=sf.demo_id WHERE sf.demo_id=@demoId AND sf.round_num=@roundNum ORDER BY sf.tick`),
+      includeSmokes ? sqlRound(`SELECT se.* FROM smoke_effects se INNER JOIN grenades g ON g.id=se.grenade_id WHERE g.demo_id=@demoId AND g.round_num=@roundNum ORDER BY se.start_tick`) : Promise.resolve([]),
+      includeBomb ? sqlRound(`SELECT be.*, p.name AS player_name FROM bomb_events be LEFT JOIN players p ON p.steam_id=be.player_steam_id AND p.demo_id=be.demo_id WHERE be.demo_id=@demoId AND be.round_num=@roundNum ORDER BY be.tick`) : Promise.resolve([]),
+      includeKills ? sqlRound(`SELECT fe.*, pt.name AS thrower_name, pb.name AS blinded_name FROM flash_events fe LEFT JOIN players pt ON pt.steam_id=fe.thrower_steam_id AND pt.demo_id=fe.demo_id LEFT JOIN players pb ON pb.steam_id=fe.blinded_steam_id AND pb.demo_id=fe.demo_id WHERE fe.demo_id=@demoId AND fe.round_num=@roundNum ORDER BY fe.tick`) : Promise.resolve([]),
+      includeShots ? sqlRound(`SELECT sf.*, p.name AS player_name FROM shots_fired sf LEFT JOIN players p ON p.steam_id=sf.steam_id AND p.demo_id=sf.demo_id WHERE sf.demo_id=@demoId AND sf.round_num=@roundNum ORDER BY sf.tick`) : Promise.resolve([]),
       runPy(join(appRoot,'python','read_trajectories.py'), join(appRoot,'demos',`${demoId}_trajectories.parquet`),  String(demoId), String(roundNum)),
-      runPy(join(appRoot,'python','read_inferno_fires.py'),join(appRoot,'demos',`${demoId}_inferno_fires.parquet`), String(demoId), String(roundNum)),
-      sqlRound(`SELECT d.*, pa.name AS attacker_name, pv.name AS victim_name FROM damage d LEFT JOIN players pa ON pa.steam_id=d.attacker_steam_id AND pa.demo_id=d.demo_id LEFT JOIN players pv ON pv.steam_id=d.victim_steam_id AND pv.demo_id=d.demo_id WHERE d.demo_id=@demoId AND d.round_num=@roundNum ORDER BY d.tick`),
+      includeSmokes ? runPy(join(appRoot,'python','read_inferno_fires.py'),join(appRoot,'demos',`${demoId}_inferno_fires.parquet`), String(demoId), String(roundNum)) : Promise.resolve([]),
+      includeKills ? sqlRound(`SELECT d.*, pa.name AS attacker_name, pv.name AS victim_name FROM damage d LEFT JOIN players pa ON pa.steam_id=d.attacker_steam_id AND pa.demo_id=d.demo_id LEFT JOIN players pv ON pv.steam_id=d.victim_steam_id AND pv.demo_id=d.demo_id WHERE d.demo_id=@demoId AND d.round_num=@roundNum ORDER BY d.tick`) : Promise.resolve([]),
     ])
 
   const roundData: RoundCache = { positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots, damage }

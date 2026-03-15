@@ -1,4 +1,4 @@
-import { useDemoStore, usePlaybackStore } from '../stores'
+import { useDemoStore, usePlaybackStore, useLayerStore } from '../stores'
 import { getCachedRound, setCachedRound } from '../roundCache'
 
 export const KNIFE_ROUND = -1  // varattu myöhempää käyttöä varten
@@ -10,13 +10,21 @@ async function loadRoundDataNow(demoId: number, roundNum: number) {
   const t0 = performance.now()
   const rounds = useDemoStore.getState().rounds
 
-  const cached = getCachedRound(demoId, roundNum)
+  const rounds = useDemoStore.getState().rounds
+  const options = getRoundLoadOptions()
+  const variant = optionsVariant(options)
+  const cached = getCachedRound(demoId, roundNum, variant)
   if (cached) {
     applyRoundData(cached)
     return
   }
 
-  const raw = await window.electronAPI.loadRoundAll(demoId, roundNum)
+  const raw = await window.electronAPI.loadRoundAll(demoId, roundNum, options)
+
+  if (requestId !== activeRequestId) {
+    return
+  }
+
   const roundInfo = rounds.find(r => r.round_num === roundNum)
   setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick)
   applyRoundData(getCachedRound(demoId, roundNum)!)

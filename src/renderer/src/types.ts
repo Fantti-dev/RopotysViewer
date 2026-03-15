@@ -21,7 +21,7 @@ declare global {
       getSmokeEffects: (demoId: number, roundNum: number) => Promise<SmokeEffect[]>
       getBombEvents: (demoId: number, roundNum: number) => Promise<BombEvent[]>
       getShotsFired: (demoId: number, roundNum: number) => Promise<Shot[]>
-      loadRoundAll:  (demoId: number, roundNum: number) => Promise<{
+      loadRoundAll:  (demoId: number, roundNum: number, options?: { includeKills?: boolean; includeSmokes?: boolean; includeBomb?: boolean; includeShots?: boolean }) => Promise<{
         positions:    Position[]
         kills:        Kill[]
         grenades:     Grenade[]
