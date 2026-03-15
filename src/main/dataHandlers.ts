@@ -31,6 +31,7 @@ const DB_CONFIG: sql.config = {
 let pool: sql.ConnectionPool | null = null
 let poolPromise: Promise<sql.ConnectionPool> | null = null
 
+
 interface RoundCache {
   positions: any[]
   kills: any[]
@@ -47,6 +48,7 @@ interface RoundCache {
 // ── Kierrosdatan lataus (ilman main-prosessin välimuistia) ───────────────────
 // Standalone funktio — käytettävissä sekä IPC-handlereissa että preloadissa
 async function loadRoundData(demoId: number, roundNum: number): Promise<RoundCache> {
+  console.log(`[loadRoundAll] load demo=${demoId} round=${roundNum} — ladataan...`)
   const t0 = Date.now()
 
   const isDev     = process.env['ELECTRON_RENDERER_URL'] !== undefined
@@ -94,6 +96,7 @@ async function loadRoundData(demoId: number, roundNum: number): Promise<RoundCac
     ])
 
   const roundData: RoundCache = { positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots, damage }
+  console.log(`[loadRoundAll] demo=${demoId} round=${roundNum} valmis ${Date.now()-t0}ms`)
   return roundData
 }
 
