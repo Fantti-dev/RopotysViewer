@@ -48,6 +48,11 @@ let worker: Worker | null = null
 let requestId = 0
 const pending = new Map<number, PendingBuild>()
 
+function logCachePerf(event: string, payload: Record<string, unknown>) {
+  if (typeof window === 'undefined' || !window.electronAPI?.debugLog) return
+  window.electronAPI.debugLog(event, payload).catch(() => {})
+}
+
 export function cacheKey(demoId: number, roundNum: number, variant = 'default') {
   return `${demoId}_${roundNum}_${variant}`
 }
@@ -161,25 +166,64 @@ export function setCachedRoundBackground(
   variant = 'default'
 ): Promise<void> {
   const key = cacheKey(demoId, roundNum, variant)
+  const startedAt = performance.now()
   if (cache.has(key)) {
+    logCachePerf('cache.build.background.hit', { demoId, roundNum, variant, cacheSize: cache.size })
     return Promise.resolve()
   }
 
   try {
     const activeWorker = ensureWorker()
     const id = ++requestId
+    logCachePerf('cache.build.background.start', {
+      demoId,
+      roundNum,
+      variant,
+      requestId: id,
+      pendingBefore: pending.size,
+      rawPositions: raw?.positions?.length ?? 0,
+    })
 
     return new Promise<void>((resolve, reject) => {
-      pending.set(id, { resolve, reject })
+      pending.set(id, {
+        resolve: () => {
+          logCachePerf('cache.build.background.done', {
+            demoId,
+            roundNum,
+            variant,
+            requestId: id,
+            durationMs: Math.round(performance.now() - startedAt),
+            pendingAfter: pending.size,
+            cacheSize: cache.size,
+          })
+          resolve()
+        },
+        reject,
+      })
       activeWorker.postMessage({ id, key, raw, startTick })
     })
   } catch {
+    logCachePerf('cache.build.background.fallback', {
+      demoId,
+      roundNum,
+      variant,
+      reason: 'worker_unavailable',
+    })
     // Fallback if Worker is unavailable for any reason.
     return new Promise((resolve) => {
       setTimeout(() => {
         if (!cache.has(key)) {
           cache.set(key, buildCachedRound(raw, startTick))
         }
+        logCachePerf('cache.build.background.done', {
+          demoId,
+          roundNum,
+          variant,
+          durationMs: Math.round(performance.now() - startedAt),
+          pendingAfter: pending.size,
+          cacheSize: cache.size,
+          mode: 'fallback',
+        })
         resolve()
       }, 0)
     })

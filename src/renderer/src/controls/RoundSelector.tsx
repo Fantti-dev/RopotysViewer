@@ -161,7 +161,7 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   const variant = optionsVariant(options)
   const cached = getCachedRound(demoId, roundNum, variant)
   if (cached) {
-    applyRoundData(cached, wasPlaying)
+    applyRoundData(cached, wasPlaying, roundNum)
     window.electronAPI.debugLog('round.load.renderer.cache_hit', {
       demoId,
       roundNum,
@@ -180,7 +180,7 @@ export async function loadRoundData(demoId: number, roundNum: number) {
 
   const roundInfo = rounds.find(r => r.round_num === roundNum)
   setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick, variant)
-  applyRoundData(getCachedRound(demoId, roundNum, variant)!, wasPlaying)
+  applyRoundData(getCachedRound(demoId, roundNum, variant)!, wasPlaying, roundNum)
   window.electronAPI.debugLog('round.load.renderer.fetch', {
     demoId,
     roundNum,
@@ -190,9 +190,13 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   }).catch(() => {})
 }
 
-function applyRoundData(data: ReturnType<typeof getCachedRound>, keepPlaying: boolean) {
+function applyRoundData(data: ReturnType<typeof getCachedRound>, keepPlaying: boolean, roundNum: number) {
   if (!data) return
   const store = usePlaybackStore.getState()
+  const demoStore = useDemoStore.getState()
+  const firstTick = data.ticks[0]
+  const lastTick = data.ticks[data.ticks.length - 1]
+
   store.setAllTicks(data.ticks)
   store.setPositions(data.positions)
   store.setKills(data.kills)
@@ -204,6 +208,59 @@ function applyRoundData(data: ReturnType<typeof getCachedRound>, keepPlaying: bo
   store.setInfernoFires(data.infernoFires)
   store.setShots(data.shots)
   store.setDamage(data.damage)
+
+  if (typeof firstTick === 'number' && typeof lastTick === 'number') {
+    const currentTick = store.currentTick
+    const clamped = Math.max(firstTick, Math.min(lastTick, currentTick))
+    // Ensure round switch never leaves stale tick from previous round.
+    // If previous tick is out of range, snap to round start.
+    store.setTick(clamped)
+  }
+
+  // Diagnostics: compare damage at tactical round-end condition vs final playback tick.
+  const roundInfo = demoStore.rounds.find((r) => r.round_num === roundNum)
+  const killEndTick = data.kills.length ? data.kills[data.kills.length - 1].tick : undefined
+  const bombDetonateTick = data.bomb.find((b) => b.event_type === 'explode')?.tick
+  const bombDefuseTick = data.bomb.find((b) => b.event_type === 'defuse')?.tick
+  const candidates = [killEndTick, bombDetonateTick, bombDefuseTick].filter((v): v is number => typeof v === 'number')
+  const conditionTick = candidates.length > 0 ? Math.max(...candidates) : (typeof lastTick === 'number' ? lastTick : 0)
+  const finalTick = typeof lastTick === 'number' ? lastTick : conditionTick
+
+  const teamBySteam = new Map<string, string>()
+  demoStore.players.forEach((p) => teamBySteam.set(String(p.steam_id), p.team_start))
+
+  const byPlayer = new Map<string, { atCondition: number; atFinal: number }>()
+  for (const dmg of data.damage) {
+    const attacker = String(dmg.attacker_steam_id ?? '')
+    const victim = String(dmg.victim_steam_id ?? '')
+    if (!attacker) continue
+    const attackerTeam = teamBySteam.get(attacker)
+    const victimTeam = teamBySteam.get(victim)
+    if (attackerTeam && victimTeam && attackerTeam === victimTeam) continue
+
+    const row = byPlayer.get(attacker) ?? { atCondition: 0, atFinal: 0 }
+    if (typeof dmg.tick === 'number' && dmg.tick <= conditionTick) row.atCondition += dmg.damage ?? 0
+    if (typeof dmg.tick === 'number' && dmg.tick <= finalTick) row.atFinal += dmg.damage ?? 0
+    byPlayer.set(attacker, row)
+  }
+
+  const damageByPlayer = Array.from(byPlayer.entries()).map(([steamId, totals]) => ({
+    steamId,
+    name: demoStore.players.find((p) => String(p.steam_id) === steamId)?.name ?? steamId,
+    atCondition: totals.atCondition,
+    atFinal: totals.atFinal,
+    deltaAfterCondition: totals.atFinal - totals.atCondition,
+  }))
+
+  window.electronAPI.debugLog('round.damage.cutoff.compare', {
+    demoId: demoStore.selectedDemo?.id,
+    roundNum,
+    winReason: roundInfo?.win_reason,
+    conditionTick,
+    finalTick,
+    damageByPlayer,
+  }).catch(() => {})
+
   store.setPlaying(keepPlaying)
 }
 
