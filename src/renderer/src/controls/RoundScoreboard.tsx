@@ -19,7 +19,7 @@ interface PlayerStats {
 }
 
 export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
-  const { kills, flashEvents, damage, currentTick, currentRound } = usePlaybackStore()
+  const { kills, flashEvents, damage, positions, currentTick, currentRound } = usePlaybackStore()
   const { players, rounds, selectedDemo } = useDemoStore()
   const { steamId: selectedId, setSteamId } = useSelectedPlayerStore()
 
@@ -59,12 +59,14 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
     if (!selectedDemo) return []
 
     const map = new Map<string, PlayerStats>()
+    const historyRoundsPlayed = rounds.filter(r => !r.is_knife && r.round_num > 0 && r.round_num < currentRound).length
+
     players.forEach(p => {
       map.set(String(p.steam_id), {
         name: p.name, team: p.team_start,
         kills:0, deaths:0, assists:0, hs:0,
         enemiesFlashed:0, flashDuration:0,
-        utilDamage:0, totalDamage:0, roundsPlayed:0,
+        utilDamage:0, totalDamage:0, roundsPlayed:historyRoundsPlayed,
       })
     })
 
@@ -83,7 +85,6 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
         if (!s) return
         s.totalDamage  += r.total_damage ?? 0
         s.utilDamage   += r.util_damage  ?? 0
-        s.roundsPlayed  = Math.max(s.roundsPlayed, r.rounds_played ?? 0)
       })
       sqlStats.flash.forEach((r: any) => {
         const s = map.get(String(r.steam_id))
@@ -95,39 +96,96 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
 
     // ── Nykyinen kierros — live currentTick:iin asti ──────────────────────
     if (!isKnifeRound) {
-      kills.filter(k => k.tick <= currentTick).forEach(k => {
-        const atk = map.get(String(k.attacker_steam_id))
-        const vic = map.get(String(k.victim_steam_id))
-        const ast = k.assister_steam_id ? map.get(String(k.assister_steam_id)) : null
-        if (atk) { atk.kills++; if (k.headshot) atk.hs++ }
-        if (vic) vic.deaths++
-        if (ast) ast.assists++
+      const currentRoundParticipants = new Set<string>()
+
+      positions.filter(p => p.tick <= currentTick).forEach((p) => {
+        const sid = String(p.steam_id)
+        if (map.has(sid)) currentRoundParticipants.add(sid)
       })
+
+      kills.filter(k => k.tick <= currentTick).forEach(k => {
+        const attackerId = String(k.attacker_steam_id)
+        const victimId = String(k.victim_steam_id)
+        const assisterId = k.assister_steam_id ? String(k.assister_steam_id) : null
+
+        const atk = map.get(attackerId)
+        const vic = map.get(victimId)
+        const ast = assisterId ? map.get(assisterId) : null
+
+        if (atk) {
+          atk.kills++
+          if (k.headshot) atk.hs++
+          currentRoundParticipants.add(attackerId)
+        }
+        if (vic) {
+          vic.deaths++
+          currentRoundParticipants.add(victimId)
+        }
+        if (ast && assisterId) {
+          ast.assists++
+          currentRoundParticipants.add(assisterId)
+        }
+      })
+
       flashEvents.filter(f => f.tick <= currentTick).forEach(f => {
-        const thrower = map.get(String(f.thrower_steam_id))
+        if (f.match_quality && f.match_quality === "unmatched") return
+        if (!f.thrower_steam_id) return
+
+        const throwerId = String(f.thrower_steam_id)
+        const thrower = map.get(throwerId)
         const blinded = map.get(String(f.blinded_steam_id))
         if (thrower && blinded && blinded.team !== thrower.team) {
           thrower.enemiesFlashed++
           thrower.flashDuration += f.flash_duration ?? 0
+          currentRoundParticipants.add(throwerId)
         }
       })
+
       damage.filter(d => d.tick <= currentTick).forEach(d => {
-        const atk = map.get(String(d.attacker_steam_id))
+        const attackerId = String(d.attacker_steam_id)
+        const atk = map.get(attackerId)
         if (!atk) return
         atk.totalDamage += d.damage ?? 0
         if (UTIL_GRENADES.has((d.weapon ?? '').replace('weapon_', ''))) {
           atk.utilDamage += d.damage ?? 0
         }
+        currentRoundParticipants.add(attackerId)
       })
-      // Nykyinen kierros roundsPlayed:iin
-      map.forEach(s => { if (s.kills > 0 || s.deaths > 0 || s.totalDamage > 0) s.roundsPlayed++ })
+
+      currentRoundParticipants.forEach((steamId) => {
+        const player = map.get(steamId)
+        if (player) player.roundsPlayed++
+      })
     }
 
     return Array.from(map.values())
-  }, [sqlStats, kills, flashEvents, damage, currentTick, players, isKnifeRound])
+  }, [sqlStats, kills, flashEvents, damage, positions, currentTick, players, rounds, currentRound, isKnifeRound])
+
+  useEffect(() => {
+    if (!selectedDemo) return
+    const maxAdr = stats.reduce((max, s) => Math.max(max, Math.round(s.totalDamage / Math.max(s.roundsPlayed, 1))), 0)
+    const totals = stats.reduce((acc, s) => {
+      acc.flashCount += s.enemiesFlashed
+      acc.flashSeconds += s.flashDuration
+      return acc
+    }, { flashCount: 0, flashSeconds: 0 })
+
+    window.electronAPI.debugLog('scoreboard.snapshot', {
+      demoId: selectedDemo.id,
+      round: currentRound,
+      tick: currentTick,
+      players: stats.length,
+      maxAdr,
+      flashCount: totals.flashCount,
+      flashSeconds: Number(totals.flashSeconds.toFixed(2)),
+    }).catch(() => {})
+  }, [selectedDemo?.id, currentRound, currentTick, stats])
 
   const ct = stats.filter(s => s.team === 'CT').sort((a, b) => b.kills - a.kills)
   const t  = stats.filter(s => s.team === 'T').sort((a, b) => b.kills - a.kills)
+
+  const loadedRounds = Math.max(currentRound - 1, 0)
+  const totalHistoryRounds = rounds.filter(r => !r.is_knife && r.round_num < currentRound).length
 
   // Sarakeleveydet — lisätty Flash # ja Flash s erillisinä
   const COL_W =    [120, 36, 36, 36, 40, 52, 44, 52, 60]
@@ -209,7 +267,7 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
               </span>
             : loadingHistory
             ? <span style={{ fontSize:9, color:'#f59e0b', fontFamily:'monospace' }}>
-                ⏳ Ladataan historiaa... {loadedRounds}/{rounds.filter(r => !r.is_knife && r.round_num < currentRound).length}
+                ⏳ Ladataan historiaa... {loadedRounds}/{totalHistoryRounds}
               </span>
             : <span style={{ fontSize:9, color:'#4b5563', fontFamily:'monospace' }}>
                 Kierros {currentRound} · tick {currentTick.toLocaleString()} · kumulatiivinen
