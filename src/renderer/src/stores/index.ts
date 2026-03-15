@@ -9,9 +9,6 @@ interface DemoState {
   players: Player[]
   isLoading: boolean
   parseProgress: string[]
-  preloadTotal: number
-  preloadDone: number
-  preloadActive: boolean
   setDemos: (d: Demo[]) => void
   setSelectedDemo: (d: Demo | null) => void
   setRounds: (r: Round[]) => void
@@ -19,7 +16,6 @@ interface DemoState {
   setLoading: (v: boolean) => void
   addParseProgress: (msg: string) => void
   clearParseProgress: () => void
-  setRoundPreload: (total: number, done: number, active: boolean) => void
   refreshDemos: () => Promise<void>
 }
 
@@ -30,9 +26,6 @@ export const useDemoStore = create<DemoState>((set) => ({
   players: [],
   isLoading: false,
   parseProgress: [],
-  preloadTotal: 0,
-  preloadDone: 0,
-  preloadActive: false,
   setDemos: (demos) => set({ demos }),
   setSelectedDemo: (selectedDemo) => set({ selectedDemo }),
   setRounds: (rounds) => set({ rounds }),
@@ -40,7 +33,6 @@ export const useDemoStore = create<DemoState>((set) => ({
   setLoading: (isLoading) => set({ isLoading }),
   addParseProgress: (msg) => set((s) => ({ parseProgress: [...s.parseProgress.slice(-50), msg] })),
   clearParseProgress: () => set({ parseProgress: [] }),
-  setRoundPreload: (preloadTotal, preloadDone, preloadActive) => set({ preloadTotal, preloadDone, preloadActive }),
   refreshDemos: async () => {
     const demos = await window.electronAPI.getDemos()
     set({ demos })
