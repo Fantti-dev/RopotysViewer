@@ -73,6 +73,50 @@ interface RoundCache {
   damage: any[]
 }
 
+interface RoundDamageWindowDiagnostics {
+  roundStartTick: number
+  roundEndTick: number
+  totalRows: number
+  inWindowRows: number
+  beforeRoundRows: number
+  afterRoundRows: number
+}
+
+async function fetchRoundDamageWindowDiagnostics(
+  p: sql.ConnectionPool,
+  demoId: number,
+  roundNum: number,
+): Promise<RoundDamageWindowDiagnostics | null> {
+  const boundsAndCounts = await p.request()
+    .input('demoId', sql.Int, demoId)
+    .input('roundNum', sql.Int, roundNum)
+    .query(`
+      SELECT
+        r.start_tick AS round_start_tick,
+        ISNULL(rn.start_tick, 2147483647) AS round_end_tick,
+        COUNT(d.id) AS total_damage_rows,
+        SUM(CASE WHEN d.tick >= r.start_tick AND d.tick < ISNULL(rn.start_tick, 2147483647) THEN 1 ELSE 0 END) AS in_window_rows,
+        SUM(CASE WHEN d.tick < r.start_tick THEN 1 ELSE 0 END) AS before_round_rows,
+        SUM(CASE WHEN d.tick >= ISNULL(rn.start_tick, 2147483647) THEN 1 ELSE 0 END) AS after_round_rows
+      FROM rounds r
+      LEFT JOIN rounds rn ON rn.demo_id=r.demo_id AND rn.round_num=r.round_num+1
+      LEFT JOIN damage d ON d.demo_id=r.demo_id AND d.round_num=r.round_num
+      WHERE r.demo_id=@demoId AND r.round_num=@roundNum
+      GROUP BY r.start_tick, rn.start_tick
+    `)
+  const row = boundsAndCounts.recordset[0]
+  if (!row) return null
+
+  return {
+    roundStartTick: Number(row.round_start_tick ?? 0),
+    roundEndTick: Number(row.round_end_tick ?? 0),
+    totalRows: Number(row.total_damage_rows ?? 0),
+    inWindowRows: Number(row.in_window_rows ?? 0),
+    beforeRoundRows: Number(row.before_round_rows ?? 0),
+    afterRoundRows: Number(row.after_round_rows ?? 0),
+  }
+}
+
 // ── Kierrosdatan lataus (ilman main-prosessin välimuistia) ───────────────────
 // Standalone funktio — käytettävissä sekä IPC-handlereissa että preloadissa
 async function loadRoundData(demoId: number, roundNum: number, options: RoundLoadOptions = {}): Promise<RoundCache> {
@@ -115,37 +159,10 @@ async function loadRoundData(demoId: number, roundNum: number, options: RoundLoa
   const includeGrenades = options.includeGrenades !== false
   const includeTrajectories = options.includeTrajectories !== false
 
-  let damageWindowDiagnostics: Record<string, unknown> | undefined
+  let damageWindowDiagnostics: RoundDamageWindowDiagnostics | null | undefined
   if (includeKills) {
     try {
-      const boundsAndCounts = await p.request()
-        .input('demoId', sql.Int, demoId)
-        .input('roundNum', sql.Int, roundNum)
-        .query(`
-          SELECT
-            r.start_tick AS round_start_tick,
-            ISNULL(rn.start_tick, 2147483647) AS round_end_tick,
-            COUNT(d.id) AS total_damage_rows,
-            SUM(CASE WHEN d.tick >= r.start_tick AND d.tick < ISNULL(rn.start_tick, 2147483647) THEN 1 ELSE 0 END) AS in_window_rows,
-            SUM(CASE WHEN d.tick < r.start_tick THEN 1 ELSE 0 END) AS before_round_rows,
-            SUM(CASE WHEN d.tick >= ISNULL(rn.start_tick, 2147483647) THEN 1 ELSE 0 END) AS after_round_rows
-          FROM rounds r
-          LEFT JOIN rounds rn ON rn.demo_id=r.demo_id AND rn.round_num=r.round_num+1
-          LEFT JOIN damage d ON d.demo_id=r.demo_id AND d.round_num=r.round_num
-          WHERE r.demo_id=@demoId AND r.round_num=@roundNum
-          GROUP BY r.start_tick, rn.start_tick
-        `)
-      const row = boundsAndCounts.recordset[0]
-      if (row) {
-        damageWindowDiagnostics = {
-          roundStartTick: row.round_start_tick,
-          roundEndTick: row.round_end_tick,
-          totalRows: row.total_damage_rows ?? 0,
-          inWindowRows: row.in_window_rows ?? 0,
-          beforeRoundRows: row.before_round_rows ?? 0,
-          afterRoundRows: row.after_round_rows ?? 0,
-        }
-      }
+      damageWindowDiagnostics = await fetchRoundDamageWindowDiagnostics(p, demoId, roundNum)
     } catch (error) {
       writeDebugLog('round.damage.window_diagnostics.error', {
         demoId,
@@ -371,7 +388,17 @@ export function registerDataHandlers() {
     const startedAt = Date.now()
     writeDebugLog('damage.endpoint.request', { demoId, roundNum })
     const p = await getPool()
+    let damageWindowDiagnostics: RoundDamageWindowDiagnostics | null = null
     try {
+      try {
+        damageWindowDiagnostics = await fetchRoundDamageWindowDiagnostics(p, demoId, roundNum)
+      } catch (diagError) {
+        writeDebugLog('damage.endpoint.window_diagnostics.error', {
+          demoId,
+          roundNum,
+          error: diagError instanceof Error ? diagError.message : String(diagError),
+        })
+      }
       const result = await p.request()
         .input('demoId', sql.Int, demoId)
         .input('roundNum', sql.Int, roundNum)
@@ -394,6 +421,7 @@ export function registerDataHandlers() {
         roundNum,
         rows: result.recordset.length,
         durationMs: Date.now() - startedAt,
+        damageWindowDiagnostics,
         tickRange: result.recordset.length > 0
           ? { minTick: result.recordset[0]?.tick, maxTick: result.recordset[result.recordset.length - 1]?.tick }
           : null,
@@ -569,7 +597,36 @@ export function registerDataHandlers() {
 
   // ── Kaikki kierroksen data yhdellä kutsulla ───────────────────────────────
   ipcMain.handle('data:loadRoundAll', async (_, demoId: number, roundNum: number, options?: RoundLoadOptions) => {
-    return loadRoundData(demoId, roundNum, options)
+    const startedAt = Date.now()
+    writeDebugLog('round.load.endpoint.request', { demoId, roundNum, options })
+    try {
+      const result = await loadRoundData(demoId, roundNum, options)
+      writeDebugLog('round.load.endpoint.result', {
+        demoId,
+        roundNum,
+        durationMs: Date.now() - startedAt,
+        options,
+        sizes: {
+          positions: result.positions.length,
+          kills: result.kills.length,
+          damage: result.damage.length,
+          grenades: result.grenades.length,
+          smokes: result.smokes.length,
+          shots: result.shots.length,
+          trajectories: result.trajectories.length,
+        },
+      })
+      return result
+    } catch (error) {
+      writeDebugLog('round.load.endpoint.error', {
+        demoId,
+        roundNum,
+        durationMs: Date.now() - startedAt,
+        options,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
   })
 
   // ── Kumulatiiviset tilastot suoraan SQL:stä ───────────────────────────────
