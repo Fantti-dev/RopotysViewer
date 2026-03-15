@@ -59,6 +59,10 @@ CONN_STRING = (
     "TrustServerCertificate=yes;"
 )
 
+ENABLE_HANDLE_MATCH = os.getenv("ENABLE_HANDLE_MATCH", "1") == "1"
+ENABLE_SUBTICK = os.getenv("ENABLE_SUBTICK", "1") == "1"
+ENABLE_SPATIAL_FALLBACK = os.getenv("ENABLE_SPATIAL_FALLBACK", "1") == "1"
+
 def get_conn():
     try:
         return pyodbc.connect(CONN_STRING)
@@ -121,6 +125,30 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
     """, filename, map_name, tickrate, server_name, match_id)
     demo_id = cursor.fetchone()[0]
     log(f"    Demo ID: {demo_id}, Kartta: {map_name}, Tickrate: {tickrate}")
+    # Additive schema migrations (safe for existing DBs)
+    try:
+        cursor.execute("IF COL_LENGTH('grenades','source_handle') IS NULL ALTER TABLE grenades ADD source_handle BIGINT NULL")
+        cursor.execute("IF COL_LENGTH('grenades','intent_tick') IS NULL ALTER TABLE grenades ADD intent_tick INT NULL")
+        cursor.execute("IF COL_LENGTH('grenades','intent_subtick') IS NULL ALTER TABLE grenades ADD intent_subtick FLOAT NULL")
+        cursor.execute("IF COL_LENGTH('flash_events','match_quality') IS NULL ALTER TABLE flash_events ADD match_quality NVARCHAR(32) NULL")
+        cursor.execute("IF COL_LENGTH('damage','source_grenade_id') IS NULL ALTER TABLE damage ADD source_grenade_id INT NULL")
+        cursor.execute("IF COL_LENGTH('damage','source_inferno_grenade_id') IS NULL ALTER TABLE damage ADD source_inferno_grenade_id INT NULL")
+        cursor.execute("""
+            IF OBJECT_ID('grenade_intents', 'U') IS NULL
+            CREATE TABLE grenade_intents (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                demo_id INT NOT NULL,
+                tick INT NOT NULL,
+                subtick FLOAT NULL,
+                thrower_steam_id NVARCHAR(64) NULL,
+                source_handle BIGINT NULL,
+                grenade_type_guess NVARCHAR(64) NULL,
+                intent_source NVARCHAR(32) NOT NULL DEFAULT 'fallback_parse_grenades'
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        log(f"    [VAROITUS] Additive schema update: {e}")
 
     # ── Pelaajat ───────────────────────────────────────────────────────────────
     log("[3/9] Parsitaan pelaajat...")
@@ -399,16 +427,20 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
         log(f"    after dropna: {len(traj_raw)}")
 
         type_map = {
+            # Source 2 projectile/entity naming variants (demoparser updates may expose either)
+            "CBaseCSGrenadeProjectile":  None,
             "CSmokeGrenade":             "smokegrenade",
             "CSmokeGrenadeProjectile":   "smokegrenade",
             "CFlashbang":                "flashbang",
             "CFlashbangProjectile":      "flashbang",
             "CHEGrenade":                "hegrenade",
             "CHEGrenadeProjectile":      "hegrenade",
+            "C_HEGrenadeProjectile":     "hegrenade",
             "CMolotovGrenade":           "molotov",
             "CMolotovProjectile":        "molotov",
             "CIncendiaryGrenade":        "incgrenade",
             "CIncendiaryGrenadeProjectile": "incgrenade",
+            "CInferno":                  "molotov",
             "CDecoyGrenade":             "decoy",
             "CDecoyProjectile":          "decoy",
         }
@@ -449,6 +481,17 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
             steam_id, gtype,
             f(row["first_x"]), f(row["first_y"]), f(row["first_z"]))
             db_id = cursor.fetchone()[0]
+            try:
+                cursor.execute("UPDATE grenades SET source_handle=?, intent_tick=?, intent_subtick=? WHERE id=?", (eid if ENABLE_HANDLE_MATCH else None), first_tick, (0.0 if ENABLE_SUBTICK else None), db_id)
+            except Exception:
+                pass
+            try:
+                cursor.execute("""
+                    INSERT INTO grenade_intents (demo_id, tick, subtick, thrower_steam_id, source_handle, grenade_type_guess, intent_source)
+                    VALUES (?,?,?,?,?,?,?)
+                """, demo_id, first_tick, (0.0 if ENABLE_SUBTICK else None), steam_id, (eid if ENABLE_HANDLE_MATCH else None), gtype, "fallback_parse_grenades")
+            except Exception:
+                pass
             # Lisää listaan — sama eid voi esiintyä useita kertoja eri tickeillä
             if eid not in grenade_id_map:
                 grenade_id_map[eid] = []
@@ -486,6 +529,47 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
             if candidates:
                 return max(candidates, key=lambda x: x[0])[1]
             return None
+
+        # Spatial fallback when event lacks/has wrong entity id.
+        traj_points_by_eid: dict[int, list[tuple[int, float, float, float]]] = {}
+        try:
+            for eid, gdf in traj_raw.groupby("entity_id", sort=False):
+                rows = [(ii(r["tick"]), f(r["x"]), f(r["y"]), f(r.get("z", 0.0))) for _, r in gdf.iterrows()]
+                traj_points_by_eid[ii(eid)] = rows
+        except Exception:
+            traj_points_by_eid = {}
+
+        def find_grenade_db_id_spatial(det_tick: int, x: float, y: float, z: float, expected_gtype: str | None = None) -> int | None:
+            best_db_id = None
+            best_score = float("inf")
+            for eid, entries in grenade_id_map.items():
+                points = traj_points_by_eid.get(eid)
+                if not points:
+                    continue
+                for first_tick, db_id, gtype in entries:
+                    if expected_gtype and expected_gtype == "molotov":
+                        if gtype not in ("molotov", "incgrenade"):
+                            continue
+                    elif expected_gtype and gtype != expected_gtype:
+                        continue
+                    max_f = MAX_FLIGHT.get(gtype, 768)
+                    if not (first_tick <= det_tick <= first_tick + max_f):
+                        continue
+
+                    # Pick closest trajectory point in small temporal neighborhood.
+                    local_best = None
+                    for pt_tick, px, py, pz in points:
+                        if abs(pt_tick - det_tick) > 96:
+                            continue
+                        dist = math.sqrt((px - x) ** 2 + (py - y) ** 2 + (pz - z) ** 2)
+                        score = dist + abs(pt_tick - det_tick) * 0.5
+                        if local_best is None or score < local_best:
+                            local_best = score
+                    if local_best is not None and local_best < best_score:
+                        best_score = local_best
+                        best_db_id = db_id
+
+            return best_db_id if best_score < 800 else None
 
         # ── Lentoradat parquetiin ─────────────────────────────────────────────
         try:
@@ -545,11 +629,13 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
                     eid      = ii(row.get("entityid") or row.get("entity_id") or 0)
                     det_tick = ii(row.get("tick"))
                     db_id    = find_grenade_db_id(eid, det_tick, expected_type)
-                    if not db_id:
-                        continue
                     x = f(row.get("X") if row.get("X") is not None else row.get("x"))
                     y = f(row.get("Y") if row.get("Y") is not None else row.get("y"))
                     z = f(row.get("Z") if row.get("Z") is not None else row.get("z"))
+                    if not db_id and ENABLE_SPATIAL_FALLBACK:
+                        db_id = find_grenade_db_id_spatial(det_tick, x, y, z, expected_type)
+                    if not db_id:
+                        continue
                     cursor.execute("""
                         UPDATE grenades SET tick_detonated=?, detonate_x=?, detonate_y=?, detonate_z=?
                         WHERE id=?
@@ -604,6 +690,79 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
 
         conn.commit()
         log(f"    Detonaatiot päivitetty")
+
+        # ── Damage -> source grenade mapping (HE + inferno/molotov) ───────────
+        try:
+            cursor.execute("""
+                SELECT id, round_num, tick, attacker_steam_id, weapon
+                FROM damage
+                WHERE demo_id=?
+            """, demo_id)
+            dmg_rows = cursor.fetchall()
+
+            cursor.execute("""
+                SELECT id, round_num, grenade_type, thrower_steam_id, tick_detonated
+                FROM grenades
+                WHERE demo_id=? AND tick_detonated IS NOT NULL
+            """, demo_id)
+            grenade_rows = cursor.fetchall()
+
+            he_types = {"hegrenade"}
+            fire_types = {"molotov", "incgrenade"}
+
+            for did, dround, dtick, dattacker, weapon in dmg_rows:
+                w = ss(weapon).replace("weapon_", "")
+                attacker = ss(dattacker) or None
+                if not attacker:
+                    continue
+
+                src_grenade_id = None
+                src_inferno_id = None
+
+                if w in he_types:
+                    best = None
+                    for gid, grnd_round, gtype, thrower, gdet in grenade_rows:
+                        if gtype not in he_types:
+                            continue
+                        if ss(thrower) != attacker:
+                            continue
+                        if ii(grnd_round) != ii(dround):
+                            continue
+                        det = ii(gdet)
+                        dist = abs(det - ii(dtick))
+                        if dist > 128:
+                            continue
+                        if best is None or dist < best[0]:
+                            best = (dist, gid)
+                    if best:
+                        src_grenade_id = best[1]
+
+                if w in fire_types or w == "inferno":
+                    best = None
+                    for gid, grnd_round, gtype, thrower, gdet in grenade_rows:
+                        if gtype not in fire_types:
+                            continue
+                        if ss(thrower) != attacker:
+                            continue
+                        if ii(grnd_round) != ii(dround):
+                            continue
+                        det = ii(gdet)
+                        if not (det <= ii(dtick) <= det + 1600):
+                            continue
+                        dist = abs(det - ii(dtick))
+                        if best is None or dist < best[0]:
+                            best = (dist, gid)
+                    if best:
+                        src_inferno_id = best[1]
+
+                if src_grenade_id is not None or src_inferno_id is not None:
+                    cursor.execute(
+                        "UPDATE damage SET source_grenade_id=?, source_inferno_grenade_id=? WHERE id=?",
+                        src_grenade_id, src_inferno_id, did
+                    )
+            conn.commit()
+        except Exception as e:
+            log(f"    [VAROITUS] Damage source mapping: {e}")
 
         # ── Savuefektit — nyt kun tick_detonated on päivitetty ───────────────
         try:
@@ -806,54 +965,120 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
     log("[10/10] Parsitaan flash-tapahtumat...")
     try:
         import pandas as pd
-        import numpy as np
 
-        # CS2:ssa ei ole player_blind-eventtia — luetaan flash_duration prop suoraan tickeistä
-        # Haetaan kaikki tikit joissa jollain pelaajalla on flash_duration > 0
+        FLASH_WINDOW_TICKS = 160
+        BLIND_EVENT_MATCH_WINDOW = 96
+
+        cursor.execute("""
+            SELECT g.tick_detonated, g.thrower_steam_id
+            FROM grenades g
+            WHERE g.demo_id=?
+              AND g.grenade_type='flashbang'
+              AND g.tick_detonated IS NOT NULL
+        """, demo_id)
+        flash_detonations = [
+            (ii(tick), ss(thrower) or None)
+            for (tick, thrower) in cursor.fetchall()
+        ]
+
+        cursor.execute("SELECT steam_id, team_start FROM players WHERE demo_id=?", demo_id)
+        player_team = {ss(sid): ss(team) for sid, team in cursor.fetchall()}
+
+        # Preferred thrower source: player_blind event (intent/result pair), fallback to detonation matching.
+        try:
+            blind_events = parser.parse_event("player_blind", player=["attacker_steamid"])
+        except Exception:
+            blind_events = pd.DataFrame()
+
+        blind_rows = []
+        if not blind_events.empty:
+            for _, row in blind_events.iterrows():
+                blinded_id = ss(row.get("user_steamid")) or None
+                if not blinded_id:
+                    continue
+                blind_rows.append((
+                    ii(row.get("tick")),
+                    blinded_id,
+                    ss(row.get("attacker_steamid")) or None
+                ))
+
         try:
             flash_ticks = parser.parse_ticks(["flash_duration"], players=None)
         except Exception:
             flash_ticks = pd.DataFrame()
 
         if not flash_ticks.empty:
-            log(f"    flash_ticks cols: {list(flash_ticks.columns)}, rows: {len(flash_ticks)}")
-            # Suodata pois nollat
             flash_ticks = flash_ticks[flash_ticks["flash_duration"] > 0.1]
-            log(f"    flash_ticks after filter: {len(flash_ticks)}")
 
-            # Ryhmittele per pelaaja: etsi jaksot joissa flash_duration laskee
-            # Käytä diff-tekniikkaa: uusi sokaistuminen alkaa kun flash_duration kasvaa
             flash_rows = []
             for steam_id, grp in flash_ticks.groupby("steamid"):
+                blinded_id = ss(str(steam_id)) or None
+                if not blinded_id:
+                    continue
+
                 grp = grp.sort_values("tick")
-                # Etsi tikit joissa flash_duration on paikallinen maksimi (jakson alku)
                 fd = grp["flash_duration"].values
                 ticks = grp["tick"].values
-                i = 0
-                while i < len(fd):
-                    # Uusi jakso alkaa
-                    peak_val = fd[i]
-                    peak_tick = ticks[i]
-                    # Hypätään eteenpäin niin kauan kuin arvo laskee
-                    j = i + 1
-                    while j < len(fd) and fd[j] <= fd[j-1]:
-                        j += 1
-                    # Tallennetaan jakso
-                    flash_rows.append((
-                        demo_id,
-                        tick_to_round_num(ii(peak_tick)),
-                        ii(peak_tick),
-                        None,  # thrower_steam_id — ei saatavilla tässä metodissa
-                        ss(str(steam_id)) or None,
-                        f(peak_val)
-                    ))
-                    i = j
+
+                prev_val = 0.0
+                for i in range(len(fd)):
+                    cur = f(fd[i])
+                    tick = ii(ticks[i])
+
+                    # New blind window starts when flash duration rises notably.
+                    if cur > 0.1 and (prev_val <= 0.1 or cur > prev_val + 0.15):
+                        thrower_id = None
+                        best_dist = 10**9
+
+                        for b_tick, b_blinded, b_thrower in blind_rows:
+                            if b_blinded != blinded_id:
+                                continue
+                            dist = abs(b_tick - tick)
+                            if dist > BLIND_EVENT_MATCH_WINDOW:
+                                continue
+                            if dist < best_dist and b_thrower:
+                                best_dist = dist
+                                thrower_id = b_thrower
+
+                        # Fallback: nearest flash detonation in window.
+                        if not thrower_id:
+                            best_dist = 10**9
+                        for det_tick, det_thrower in flash_detonations:
+                            # Blind should happen near detonation; tolerate slight delay/lead.
+                            dist = abs(det_tick - tick)
+                            if dist > FLASH_WINDOW_TICKS:
+                                continue
+                            if dist < best_dist:
+                                best_dist = dist
+                                thrower_id = det_thrower
+
+                        if thrower_id and thrower_id == blinded_id:
+                            thrower_id = None
+
+                        # Team sanity (fallback to None when clearly same-team based on start team)
+                        if thrower_id:
+                            bt = player_team.get(blinded_id)
+                            tt = player_team.get(thrower_id)
+                            if bt and tt and bt == tt:
+                                thrower_id = None
+
+                        flash_rows.append((
+                            demo_id,
+                            tick_to_round_num(tick),
+                            tick,
+                            thrower_id,
+                            blinded_id,
+                            cur,
+                            ("player_blind_event" if thrower_id and best_dist <= BLIND_EVENT_MATCH_WINDOW else "detonation_window" if thrower_id else "unmatched")
+                        ))
+
+                    prev_val = cur
 
             if flash_rows:
                 cursor.executemany("""
                     INSERT INTO flash_events
-                    (demo_id, round_num, tick, thrower_steam_id, blinded_steam_id, flash_duration)
-                    VALUES (?,?,?,?,?,?)
+                    (demo_id, round_num, tick, thrower_steam_id, blinded_steam_id, flash_duration, match_quality)
+                    VALUES (?,?,?,?,?,?,?)
                 """, flash_rows)
             conn.commit()
             log(f"    Flash-tapahtumat: {len(flash_rows)}")
@@ -862,8 +1087,6 @@ def parse_and_store(dem_path: str, force: bool = False) -> int:
     except Exception as e:
         log(f"    [VAROITUS] Flash-parsinta: {e}")
         import traceback; log(traceback.format_exc())
-    except Exception as e:
-        log(f"    [VAROITUS] Flash-parsinta: {e}")
 
     conn.close()
     log(f"[OK] Valmis! Demo ID: {demo_id}")

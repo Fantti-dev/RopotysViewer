@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useDemoStore, usePlaybackStore } from '../stores'
-import { loadRoundData } from '../controls/RoundSelector'
+import { loadRoundData, preloadRoundsSilently, prewarmRoundsForInstantOpen, stopRoundPreload } from '../controls/RoundSelector'
 import { clearCache } from '../roundCache'
 
 export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
@@ -8,8 +8,7 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
     demos, selectedDemo, setSelectedDemo,
     setPlayers, setRounds, isLoading, setLoading,
     parseProgress, addParseProgress, clearParseProgress,
-    preloadTotal, preloadDone, preloadActive, setPreload,
-    refreshDemos
+    setRoundPreload, refreshDemos
   } = useDemoStore()
 
   const { setRound } = usePlaybackStore()
@@ -51,9 +50,11 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
   }
 
   const handleSelectDemo = async (demo: typeof demos[0]) => {
+    stopRoundPreload()
     setSelectedDemo(demo)
     setLoading(true)
     clearCache()  // Tyhjennä vanha demo pois
+    setRoundPreload(0, 0, false)
     try {
       const [players, rounds] = await Promise.all([
         window.electronAPI.getPlayers(demo.id),
@@ -62,25 +63,24 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
       setPlayers(players)
       setRounds(rounds)
 
-      const firstRound = rounds.length > 0 ? rounds[0].round_num : 0
+      const playableRounds = rounds.filter((r: any) => !r.is_knife && r.round_num > 0)
+      const firstRound = playableRounds.length > 0 ? playableRounds[0].round_num : (rounds.length > 0 ? rounds[0].round_num : 0)
       setRound(firstRound)
 
       // Lataa ensimmäinen kierros heti
       await loadRoundData(demo.id, firstRound)
+
+      // Esilataa 3 ensimmäistä kierrosta saman variantin cachena "instant" round switchiin.
+      const firstThree = playableRounds.slice(0, 3).map((r: any) => r.round_num).filter((n: number) => n !== firstRound)
+      prewarmRoundsForInstantOpen(demo.id, firstThree).catch(() => {})
+
+      // Käynnistä hiljainen taustacache kaikille muille kierroksille.
+      const roundNums = playableRounds.map((r: any) => r.round_num)
+      preloadRoundsSilently(demo.id, roundNums, firstRound).catch(() => {})
+
       onSelect?.()
       setLoading(false)
 
-      // Preload kaikki muut kierrokset taustalla — tallennetaan suoraan renderer-cacheen
-      const allRoundNums = rounds.map((r: any) => r.round_num)
-      setPreload(allRoundNums.length, 1, true)
-
-      const unsub = window.electronAPI.onPreloadProgress(({ done, total, complete }) => {
-        setPreload(total, done, !complete)
-        if (complete) unsub()
-      })
-
-      window.electronAPI.preloadAllRounds(demo.id, allRoundNums)
-        .catch(() => { setPreload(0, 0, false) })
 
     } catch(e) {
       setLoading(false)
