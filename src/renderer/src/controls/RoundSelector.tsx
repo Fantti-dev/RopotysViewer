@@ -1,24 +1,46 @@
-import { useDemoStore, usePlaybackStore } from '../stores'
+import { useDemoStore, usePlaybackStore, useLayerStore } from '../stores'
 import { getCachedRound, setCachedRound } from '../roundCache'
 
 export const KNIFE_ROUND = -1  // varattu myöhempää käyttöä varten
 
-export async function loadRoundData(demoId: number, roundNum: number) {
-  const t0 = performance.now()
-  const rounds = useDemoStore.getState().rounds
+let activeRequestId = 0
 
-  const cached = getCachedRound(demoId, roundNum)
+
+function getRoundLoadOptions() {
+  const layers = useLayerStore.getState()
+  return {
+    includeKills: layers.kills || layers.killLines,
+    includeSmokes: layers.smokes,
+    includeBomb: layers.bomb,
+    includeShots: layers.shots,
+  }
+}
+
+function optionsVariant(options: ReturnType<typeof getRoundLoadOptions>) {
+  return `${options.includeKills ? 1 : 0}${options.includeSmokes ? 1 : 0}${options.includeBomb ? 1 : 0}${options.includeShots ? 1 : 0}`
+}
+
+export async function loadRoundData(demoId: number, roundNum: number) {
+  const requestId = ++activeRequestId
+
+  const rounds = useDemoStore.getState().rounds
+  const options = getRoundLoadOptions()
+  const variant = optionsVariant(options)
+  const cached = getCachedRound(demoId, roundNum, variant)
   if (cached) {
     applyRoundData(cached)
-    console.log(`[loadRound] cache hit round=${roundNum} ${(performance.now()-t0).toFixed(1)}ms`)
     return
   }
 
-  const raw = await window.electronAPI.loadRoundAll(demoId, roundNum)
+  const raw = await window.electronAPI.loadRoundAll(demoId, roundNum, options)
+
+  if (requestId !== activeRequestId) {
+    return
+  }
+
   const roundInfo = rounds.find(r => r.round_num === roundNum)
-  setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick)
-  applyRoundData(getCachedRound(demoId, roundNum)!)
-  console.log(`[loadRound] IPC valmis round=${roundNum} ${(performance.now()-t0).toFixed(0)}ms`)
+  setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick, variant)
+  applyRoundData(getCachedRound(demoId, roundNum, variant)!)
 }
 
 function applyRoundData(data: ReturnType<typeof getCachedRound>) {
