@@ -18,6 +18,7 @@ export default function PlaybackBar() {
   const isPlayingRef = useRef(false)
   const allTicksRef  = useRef(allTicks)
   const speedRef     = useRef(playbackSpeed)
+  const lastJankLogRef = useRef<number>(0)
 
   useEffect(() => { allTicksRef.current = allTicks }, [allTicks])
   useEffect(() => { speedRef.current = playbackSpeed }, [playbackSpeed])
@@ -44,6 +45,22 @@ export default function PlaybackBar() {
       const totalProgress = elapsed / msPerTick
       const advance       = Math.floor(totalProgress)
       const subProgress   = totalProgress - advance
+
+      // Diagnostics: playback hitch/jank visibility while preloading/cacheing.
+      if (elapsed > 80 || advance > 5) {
+        const sinceLast = now - lastJankLogRef.current
+        if (sinceLast > 2000) {
+          lastJankLogRef.current = now
+          window.electronAPI.debugLog('playback.jank', {
+            elapsedMs: Math.round(elapsed),
+            advancedTicks: advance,
+            speed: speedRef.current,
+            currentTick: ticks[tickIdxRef.current] ?? null,
+            tickCount: ticks.length,
+          }).catch(() => {})
+        }
+      }
+
       if (advance > 0) {
         lastTimeRef.current += advance * msPerTick
         tickIdxRef.current   = Math.min(tickIdxRef.current + advance, ticks.length - 1)

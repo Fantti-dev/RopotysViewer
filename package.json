@@ -5,8 +5,9 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "preview": "electron-vite preview"
+    "build": "npm run check:merge-conflicts && electron-vite build",
+    "preview": "electron-vite preview",
+    "check:merge-conflicts": "node scripts/check-merge-conflicts.mjs"
   },
   "dependencies": {
     "mssql": "^10.0.4",
