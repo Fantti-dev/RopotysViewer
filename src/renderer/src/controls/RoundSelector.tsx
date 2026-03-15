@@ -69,7 +69,7 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
       if (sessionId !== preloadSessionId) return
 
       const roundInfo = rounds.find(r => r.round_num === roundNum)
-      await setCachedRoundBackground(demoId, roundNum, raw, roundInfo?.start_tick, FULL_PRELOAD_VARIANT)
+      setCachedRoundBackground(demoId, roundNum, raw, roundInfo?.start_tick, FULL_PRELOAD_VARIANT).catch(() => {})
     } catch {
       // Silent preload: ignore per-round failures, on-demand loading still works.
     }

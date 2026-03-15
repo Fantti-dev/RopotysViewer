@@ -23,7 +23,7 @@ export interface RoundData {
 // Module-tason Map — ei React-state, ei re-renderöintiä
 const cache = new Map<string, RoundData>()
 let backgroundWriteQueue: Promise<void> = Promise.resolve()
-const BACKGROUND_CHUNK_SIZE = 2000
+const BACKGROUND_CHUNK_SIZE = 500
 
 export function cacheKey(demoId: number, roundNum: number, variant = 'default') {
   return `${demoId}_${roundNum}_${variant}`
