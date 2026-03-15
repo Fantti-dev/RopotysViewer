@@ -30,9 +30,17 @@ const FULL_PRELOAD_OPTIONS = {
 
 const FULL_PRELOAD_VARIANT = optionsVariant(FULL_PRELOAD_OPTIONS)
 
+
+function setRoundPreloadState(total: number, done: number, active: boolean) {
+  const setter = (useDemoStore.getState() as any).setRoundPreload
+  if (typeof setter === 'function') {
+    setter(total, done, active)
+  }
+}
+
 export function stopRoundPreload() {
   preloadSessionId++
-  useDemoStore.getState().setRoundPreload(0, 0, false)
+  setRoundPreloadState(0, 0, false)
 }
 
 export async function preloadRoundsSilently(demoId: number, roundNums: number[], skipRound?: number) {
@@ -42,14 +50,14 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
   const total = targets.length
   let done = 0
 
-  useDemoStore.getState().setRoundPreload(total, 0, total > 0)
+  setRoundPreloadState(total, 0, total > 0)
 
   for (const roundNum of targets) {
     if (sessionId !== preloadSessionId) return
 
     if (getCachedRound(demoId, roundNum, FULL_PRELOAD_VARIANT)) {
       done++
-      useDemoStore.getState().setRoundPreload(total, done, done < total)
+      setRoundPreloadState(total, done, done < total)
       continue
     }
 
@@ -63,7 +71,7 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
     }
 
     done++
-    useDemoStore.getState().setRoundPreload(total, done, done < total)
+    setRoundPreloadState(total, done, done < total)
 
     // Yield back to UI/event loop between rounds.
     await new Promise((resolve) => setTimeout(resolve, 0))

@@ -3,6 +3,9 @@ import { loadRoundData } from './RoundSelector'
 
 export default function Scoreboard() {
   const { selectedDemo, rounds } = useDemoStore()
+  const preloadTotal = useDemoStore((s: any) => s.preloadTotal ?? 0)
+  const preloadDone = useDemoStore((s: any) => s.preloadDone ?? 0)
+  const preloadActive = useDemoStore((s: any) => s.preloadActive ?? false)
   const { currentRound, setRound } = usePlaybackStore()
 
   if (!selectedDemo) return (
