@@ -1,6 +1,7 @@
 import { ipcMain, app } from 'electron'
 import { join } from 'path'
 import { spawn } from 'child_process'
+import { mkdirSync, appendFileSync } from 'fs'
 import sql from 'mssql'
 
 // ── SQL Server konfiguraatio ──────────────────────────────────────────────────
@@ -30,6 +31,25 @@ const DB_CONFIG: sql.config = {
 
 let pool: sql.ConnectionPool | null = null
 let poolPromise: Promise<sql.ConnectionPool> | null = null
+let debugLogPath: string | null = null
+
+function getDebugLogPath() {
+  if (debugLogPath) return debugLogPath
+  const debugLogDir = join(app.getPath('userData'), 'logs')
+  debugLogPath = join(debugLogDir, `debug-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`)
+  mkdirSync(debugLogDir, { recursive: true })
+  return debugLogPath
+}
+
+function writeDebugLog(event: string, payload: unknown) {
+  try {
+    const path = getDebugLogPath()
+    const row = JSON.stringify({ ts: new Date().toISOString(), event, payload })
+    appendFileSync(path, `${row}\n`, 'utf-8')
+  } catch {
+    // Logging must never crash app behavior.
+  }
+}
 
 interface RoundLoadOptions {
   includeKills?: boolean
@@ -54,6 +74,7 @@ interface RoundCache {
 // ── Kierrosdatan lataus (ilman main-prosessin välimuistia) ───────────────────
 // Standalone funktio — käytettävissä sekä IPC-handlereissa että preloadissa
 async function loadRoundData(demoId: number, roundNum: number, options: RoundLoadOptions = {}): Promise<RoundCache> {
+  const startedAt = Date.now()
   const isDev     = process.env['ELECTRON_RENDERER_URL'] !== undefined
   const appRoot   = isDev ? join(__dirname, '../..') : join(app.getAppPath(), '../..')
   const pythonExe = join(appRoot, 'python', 'venv', 'Scripts', 'python.exe')
@@ -104,6 +125,24 @@ async function loadRoundData(demoId: number, roundNum: number, options: RoundLoa
     ])
 
   const roundData: RoundCache = { positions, kills, grenades, trajectories, smokes, bomb, flash, infernoFires, shots, damage }
+  writeDebugLog('round.load.main.complete', {
+    demoId,
+    roundNum,
+    durationMs: Date.now() - startedAt,
+    sizes: {
+      positions: positions.length,
+      kills: kills.length,
+      grenades: grenades.length,
+      smokes: smokes.length,
+      bomb: bomb.length,
+      flash: flash.length,
+      infernoFires: infernoFires.length,
+      shots: shots.length,
+      damage: damage.length,
+      trajectories: trajectories.length,
+    },
+    options,
+  })
   return roundData
 }
 
@@ -508,5 +547,14 @@ export function registerDataHandlers() {
         `),
     ])
     return { kills: kills.recordset, damage: damage.recordset, flash: flash.recordset }
+  })
+
+  ipcMain.handle('debug:log', async (_, event: string, payload?: unknown) => {
+    writeDebugLog(event, payload)
+    return { ok: true }
+  })
+
+  ipcMain.handle('debug:getLogPath', async () => {
+    return getDebugLogPath()
   })
 }

@@ -16,6 +16,16 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
   const [showProgress, setShowProgress] = useState(false)
   const [posProgress, setPosProgress] = useState(0)  // 0-100
 
+  const handleCopyDebugLogPath = async () => {
+    try {
+      const path = await window.electronAPI.getDebugLogPath()
+      await navigator.clipboard.writeText(path)
+      alert(`Debug-logipolku kopioitu leikepöydälle:\n${path}`)
+    } catch {
+      alert('Debug-logipolun kopiointi epäonnistui')
+    }
+  }
+
   const handleOpenDemo = async () => {
     const paths = await window.electronAPI.openDemoDialog()
     if (!paths || paths.length === 0) return
@@ -51,6 +61,7 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
 
   const handleSelectDemo = async (demo: typeof demos[0]) => {
     stopRoundPreload()
+    window.electronAPI.debugLog('demo.select', { demoId: demo.id, map: demo.map_name }).catch(() => {})
     setSelectedDemo(demo)
     setLoading(true)
     clearCache()  // Tyhjennä vanha demo pois
@@ -101,7 +112,16 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
       <div className="px-3 pt-3 pb-2 border-b border-cs-border">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[10px] font-semibold uppercase tracking-widest text-cs-muted">Demot</span>
-          <span className="text-[10px] text-cs-muted bg-white/5 rounded px-1.5 py-0.5">{demos.length}</span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleCopyDebugLogPath}
+              className="text-[10px] text-cs-muted bg-white/5 rounded px-1.5 py-0.5 hover:bg-white/10"
+              title="Kopioi debug-login tiedostopolku"
+            >
+              Log path
+            </button>
+            <span className="text-[10px] text-cs-muted bg-white/5 rounded px-1.5 py-0.5">{demos.length}</span>
+          </div>
         </div>
         <button
           onClick={handleOpenDemo}

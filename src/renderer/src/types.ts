@@ -36,6 +36,8 @@ declare global {
       getCumulativeStats: (demoId: number, upToRound: number) => Promise<{ kills: any[]; damage: any[]; flash: any[] }>
       getFlashEvents: (demoId: number, roundNum: number) => Promise<FlashEvent[]>
       getHeatmapPositions: (demoId: number, steamId?: string) => Promise<HeatmapPoint[]>
+      debugLog: (event: string, payload?: unknown) => Promise<{ ok: boolean }>
+      getDebugLogPath: () => Promise<string>
 
       minimizeWindow: () => void
       maximizeWindow: () => void

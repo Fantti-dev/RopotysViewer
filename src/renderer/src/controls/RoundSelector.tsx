@@ -64,6 +64,7 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
   setRoundPreloadState(total, 0, total > 0)
 
   for (const roundNum of targets) {
+    const startedAt = performance.now()
     if (sessionId !== preloadSessionId) return
 
     await waitPreloadSlot()
@@ -82,8 +83,14 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
 
       const roundInfo = rounds.find(r => r.round_num === roundNum)
       setCachedRoundBackground(demoId, roundNum, raw, roundInfo?.start_tick, FULL_PRELOAD_VARIANT).catch(() => {})
+      window.electronAPI.debugLog('round.preload.silent.done', {
+        demoId,
+        roundNum,
+        durationMs: Math.round(performance.now() - startedAt),
+      }).catch(() => {})
     } catch {
       // Silent preload: ignore per-round failures, on-demand loading still works.
+      window.electronAPI.debugLog('round.preload.silent.error', { demoId, roundNum }).catch(() => {})
     }
 
     done++
@@ -103,16 +110,24 @@ export async function prewarmRoundsForInstantOpen(demoId: number, roundNums: num
     if (getCachedRound(demoId, roundNum, variant)) continue
 
     try {
+      const startedAt = performance.now()
       const raw = await window.electronAPI.loadRoundAll(demoId, roundNum, options)
       const roundInfo = rounds.find(r => r.round_num === roundNum)
       await setCachedRoundBackground(demoId, roundNum, raw, roundInfo?.start_tick, variant)
+      window.electronAPI.debugLog('round.prewarm.done', {
+        demoId,
+        roundNum,
+        durationMs: Math.round(performance.now() - startedAt),
+      }).catch(() => {})
     } catch {
       // Best-effort prewarm only.
+      window.electronAPI.debugLog('round.prewarm.error', { demoId, roundNum }).catch(() => {})
     }
   }
 }
 
 export async function loadRoundData(demoId: number, roundNum: number) {
+  const startedAt = performance.now()
   const requestId = ++activeRequestId
   const wasPlaying = usePlaybackStore.getState().isPlaying
 
@@ -122,6 +137,13 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   const cached = getCachedRound(demoId, roundNum, variant)
   if (cached) {
     applyRoundData(cached, wasPlaying)
+    window.electronAPI.debugLog('round.load.renderer.cache_hit', {
+      demoId,
+      roundNum,
+      variant,
+      wasPlaying,
+      durationMs: Math.round(performance.now() - startedAt),
+    }).catch(() => {})
     return
   }
 
@@ -134,6 +156,13 @@ export async function loadRoundData(demoId: number, roundNum: number) {
   const roundInfo = rounds.find(r => r.round_num === roundNum)
   setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick, variant)
   applyRoundData(getCachedRound(demoId, roundNum, variant)!, wasPlaying)
+  window.electronAPI.debugLog('round.load.renderer.fetch', {
+    demoId,
+    roundNum,
+    variant,
+    wasPlaying,
+    durationMs: Math.round(performance.now() - startedAt),
+  }).catch(() => {})
 }
 
 function applyRoundData(data: ReturnType<typeof getCachedRound>, keepPlaying: boolean) {

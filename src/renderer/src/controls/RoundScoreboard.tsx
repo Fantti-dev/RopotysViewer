@@ -161,6 +161,26 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
     return Array.from(map.values())
   }, [sqlStats, kills, flashEvents, damage, positions, currentTick, players, rounds, currentRound, isKnifeRound])
 
+  useEffect(() => {
+    if (!selectedDemo) return
+    const maxAdr = stats.reduce((max, s) => Math.max(max, Math.round(s.totalDamage / Math.max(s.roundsPlayed, 1))), 0)
+    const totals = stats.reduce((acc, s) => {
+      acc.flashCount += s.enemiesFlashed
+      acc.flashSeconds += s.flashDuration
+      return acc
+    }, { flashCount: 0, flashSeconds: 0 })
+
+    window.electronAPI.debugLog('scoreboard.snapshot', {
+      demoId: selectedDemo.id,
+      round: currentRound,
+      tick: currentTick,
+      players: stats.length,
+      maxAdr,
+      flashCount: totals.flashCount,
+      flashSeconds: Number(totals.flashSeconds.toFixed(2)),
+    }).catch(() => {})
+  }, [selectedDemo?.id, currentRound, currentTick, stats])
+
   const ct = stats.filter(s => s.team === 'CT').sort((a, b) => b.kills - a.kills)
   const t  = stats.filter(s => s.team === 'T').sort((a, b) => b.kills - a.kills)
 

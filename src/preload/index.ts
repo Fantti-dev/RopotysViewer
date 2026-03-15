@@ -83,6 +83,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getFlashEvents: (demoId: number, roundNum: number) =>
     ipcRenderer.invoke('data:getFlashEvents', demoId, roundNum),
 
+  debugLog: (event: string, payload?: unknown) =>
+    ipcRenderer.invoke('debug:log', event, payload),
+
+  getDebugLogPath: () =>
+    ipcRenderer.invoke('debug:getLogPath'),
+
   // ── Window kontrollit ──────────────────────────────────────────────────────
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
   maximizeWindow: () => ipcRenderer.send('window:maximize'),
