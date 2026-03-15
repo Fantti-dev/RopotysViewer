@@ -1,5 +1,5 @@
 import { useDemoStore, usePlaybackStore, useLayerStore } from '../stores'
-import { getCachedRound, setCachedRound } from '../roundCache'
+import { getCachedRound, setCachedRound, setCachedRoundBackground } from '../roundCache'
 
 export const KNIFE_ROUND = -1  // varattu myöhempää käyttöä varten
 
@@ -38,6 +38,8 @@ function setRoundPreloadState(total: number, done: number, active: boolean) {
   }
 }
 
+
+
 export function stopRoundPreload() {
   preloadSessionId++
   setRoundPreloadState(0, 0, false)
@@ -62,10 +64,12 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
     }
 
     try {
+      // Fetch can run in background even during playback.
       const raw = await window.electronAPI.loadRoundAll(demoId, roundNum, FULL_PRELOAD_OPTIONS)
       if (sessionId !== preloadSessionId) return
+
       const roundInfo = rounds.find(r => r.round_num === roundNum)
-      setCachedRound(demoId, roundNum, raw, roundInfo?.start_tick, FULL_PRELOAD_VARIANT)
+      await setCachedRoundBackground(demoId, roundNum, raw, roundInfo?.start_tick, FULL_PRELOAD_VARIANT)
     } catch {
       // Silent preload: ignore per-round failures, on-demand loading still works.
     }
