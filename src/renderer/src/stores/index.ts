@@ -9,9 +9,6 @@ interface DemoState {
   players: Player[]
   isLoading: boolean
   parseProgress: string[]
-  preloadTotal: number
-  preloadDone: number
-  preloadActive: boolean
   setDemos: (d: Demo[]) => void
   setSelectedDemo: (d: Demo | null) => void
   setRounds: (r: Round[]) => void
@@ -30,9 +27,6 @@ export const useDemoStore = create<DemoState>((set) => ({
   players: [],
   isLoading: false,
   parseProgress: [],
-  preloadTotal: 0,
-  preloadDone: 0,
-  preloadActive: false,
   setDemos: (demos) => set({ demos }),
   setSelectedDemo: (selectedDemo) => set({ selectedDemo }),
   setRounds: (rounds) => set({ rounds }),
