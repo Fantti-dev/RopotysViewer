@@ -463,17 +463,17 @@ export function registerDataHandlers() {
             0 AS deaths, 0 AS assists
           FROM kills k
           JOIN rounds r ON r.demo_id=k.demo_id AND r.round_num=k.round_num
-          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND ISNULL(r.is_knife,0)=0
+          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND k.round_num > 0 AND ISNULL(r.is_knife,0)=0
           GROUP BY attacker_steam_id
           UNION ALL
           SELECT victim_steam_id, 0, 0, COUNT(*), 0
           FROM kills k JOIN rounds r ON r.demo_id=k.demo_id AND r.round_num=k.round_num
-          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND ISNULL(r.is_knife,0)=0
+          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND k.round_num > 0 AND ISNULL(r.is_knife,0)=0
           GROUP BY victim_steam_id
           UNION ALL
           SELECT assister_steam_id, 0, 0, 0, COUNT(*)
           FROM kills k JOIN rounds r ON r.demo_id=k.demo_id AND r.round_num=k.round_num
-          WHERE k.demo_id=@demoId AND k.round_num < @upToRound
+          WHERE k.demo_id=@demoId AND k.round_num < @upToRound AND k.round_num > 0
             AND assister_steam_id IS NOT NULL AND ISNULL(r.is_knife,0)=0
           GROUP BY assister_steam_id
         `),
@@ -484,11 +484,10 @@ export function registerDataHandlers() {
           SELECT d.attacker_steam_id AS steam_id,
             SUM(d.damage) AS total_damage,
             SUM(CASE WHEN REPLACE(d.weapon,'weapon_','') IN ('hegrenade','molotov','incgrenade')
-              THEN d.damage ELSE 0 END) AS util_damage,
-            COUNT(DISTINCT d.round_num) AS rounds_played
+              THEN d.damage ELSE 0 END) AS util_damage
           FROM damage d
           JOIN rounds r ON r.demo_id=d.demo_id AND r.round_num=d.round_num
-          WHERE d.demo_id=@demoId AND d.round_num < @upToRound AND ISNULL(r.is_knife,0)=0
+          WHERE d.demo_id=@demoId AND d.round_num < @upToRound AND d.round_num > 0 AND ISNULL(r.is_knife,0)=0
           GROUP BY d.attacker_steam_id
         `),
       p.request()
@@ -502,9 +501,9 @@ export function registerDataHandlers() {
           JOIN players pt ON pt.steam_id=fe.thrower_steam_id AND pt.demo_id=fe.demo_id
           JOIN players pb ON pb.steam_id=fe.blinded_steam_id  AND pb.demo_id=fe.demo_id
           JOIN rounds r   ON r.demo_id=fe.demo_id AND r.round_num=fe.round_num
-          WHERE fe.demo_id=@demoId AND fe.round_num < @upToRound
+          WHERE fe.demo_id=@demoId AND fe.round_num < @upToRound AND fe.round_num > 0
             AND pt.team_start <> pb.team_start AND ISNULL(r.is_knife,0)=0
-            AND ISNULL(fe.match_quality,'unmatched') IN ('detonation_window','entity_tick','exact_handle','spatial_strict')
+            AND ISNULL(fe.match_quality,'unmatched') IN ('player_blind_event','detonation_window','entity_tick','exact_handle','spatial_strict')
           GROUP BY fe.thrower_steam_id
         `),
     ])

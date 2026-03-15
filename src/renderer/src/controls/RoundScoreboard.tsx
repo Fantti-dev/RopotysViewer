@@ -19,7 +19,7 @@ interface PlayerStats {
 }
 
 export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
-  const { kills, flashEvents, damage, currentTick, currentRound } = usePlaybackStore()
+  const { kills, flashEvents, damage, positions, currentTick, currentRound } = usePlaybackStore()
   const { players, rounds, selectedDemo } = useDemoStore()
   const { steamId: selectedId, setSteamId } = useSelectedPlayerStore()
 
@@ -59,12 +59,14 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
     if (!selectedDemo) return []
 
     const map = new Map<string, PlayerStats>()
+    const historyRoundsPlayed = rounds.filter(r => !r.is_knife && r.round_num > 0 && r.round_num < currentRound).length
+
     players.forEach(p => {
       map.set(String(p.steam_id), {
         name: p.name, team: p.team_start,
         kills:0, deaths:0, assists:0, hs:0,
         enemiesFlashed:0, flashDuration:0,
-        utilDamage:0, totalDamage:0, roundsPlayed:0,
+        utilDamage:0, totalDamage:0, roundsPlayed:historyRoundsPlayed,
       })
     })
 
@@ -83,7 +85,6 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
         if (!s) return
         s.totalDamage  += r.total_damage ?? 0
         s.utilDamage   += r.util_damage  ?? 0
-        s.roundsPlayed  = Math.max(s.roundsPlayed, r.rounds_played ?? 0)
       })
       sqlStats.flash.forEach((r: any) => {
         const s = map.get(String(r.steam_id))
@@ -96,6 +97,11 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
     // ── Nykyinen kierros — live currentTick:iin asti ──────────────────────
     if (!isKnifeRound) {
       const currentRoundParticipants = new Set<string>()
+
+      positions.filter(p => p.tick <= currentTick).forEach((p) => {
+        const sid = String(p.steam_id)
+        if (map.has(sid)) currentRoundParticipants.add(sid)
+      })
 
       kills.filter(k => k.tick <= currentTick).forEach(k => {
         const attackerId = String(k.attacker_steam_id)
@@ -153,7 +159,7 @@ export default function RoundScoreboard({ onClose }: { onClose: () => void }) {
     }
 
     return Array.from(map.values())
-  }, [sqlStats, kills, flashEvents, damage, currentTick, players, isKnifeRound])
+  }, [sqlStats, kills, flashEvents, damage, positions, currentTick, players, rounds, currentRound, isKnifeRound])
 
   const ct = stats.filter(s => s.team === 'CT').sort((a, b) => b.kills - a.kills)
   const t  = stats.filter(s => s.team === 'T').sort((a, b) => b.kills - a.kills)

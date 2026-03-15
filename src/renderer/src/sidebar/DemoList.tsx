@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useDemoStore, usePlaybackStore } from '../stores'
-import { loadRoundData, preloadRoundsSilently, stopRoundPreload } from '../controls/RoundSelector'
+import { loadRoundData, preloadRoundsSilently, prewarmRoundsForInstantOpen, stopRoundPreload } from '../controls/RoundSelector'
 import { clearCache } from '../roundCache'
 
 export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
@@ -63,14 +63,19 @@ export default function DemoList({ onSelect }: { onSelect?: () => void } = {}) {
       setPlayers(players)
       setRounds(rounds)
 
-      const firstRound = rounds.length > 0 ? rounds[0].round_num : 0
+      const playableRounds = rounds.filter((r: any) => !r.is_knife && r.round_num > 0)
+      const firstRound = playableRounds.length > 0 ? playableRounds[0].round_num : (rounds.length > 0 ? rounds[0].round_num : 0)
       setRound(firstRound)
 
       // Lataa ensimmäinen kierros heti
       await loadRoundData(demo.id, firstRound)
 
+      // Esilataa 3 ensimmäistä kierrosta saman variantin cachena "instant" round switchiin.
+      const firstThree = playableRounds.slice(0, 3).map((r: any) => r.round_num).filter((n: number) => n !== firstRound)
+      prewarmRoundsForInstantOpen(demo.id, firstThree).catch(() => {})
+
       // Käynnistä hiljainen taustacache kaikille muille kierroksille.
-      const roundNums = rounds.map((r: any) => r.round_num)
+      const roundNums = playableRounds.map((r: any) => r.round_num)
       preloadRoundsSilently(demo.id, roundNums, firstRound).catch(() => {})
 
       onSelect?.()

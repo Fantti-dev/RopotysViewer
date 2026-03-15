@@ -94,6 +94,24 @@ export async function preloadRoundsSilently(demoId: number, roundNums: number[],
   }
 }
 
+export async function prewarmRoundsForInstantOpen(demoId: number, roundNums: number[]) {
+  const rounds = useDemoStore.getState().rounds
+  const options = getRoundLoadOptions()
+  const variant = optionsVariant(options)
+
+  for (const roundNum of roundNums) {
+    if (getCachedRound(demoId, roundNum, variant)) continue
+
+    try {
+      const raw = await window.electronAPI.loadRoundAll(demoId, roundNum, options)
+      const roundInfo = rounds.find(r => r.round_num === roundNum)
+      await setCachedRoundBackground(demoId, roundNum, raw, roundInfo?.start_tick, variant)
+    } catch {
+      // Best-effort prewarm only.
+    }
+  }
+}
+
 export async function loadRoundData(demoId: number, roundNum: number) {
   const requestId = ++activeRequestId
   const wasPlaying = usePlaybackStore.getState().isPlaying
@@ -141,7 +159,6 @@ export default function RoundSelector() {
 
   const handleClick = (roundNum: number) => {
     if (!selectedDemo) return
-    usePlaybackStore.getState().setPlaying(false)
     setRound(roundNum)
     loadRoundData(selectedDemo.id, roundNum)
   }
