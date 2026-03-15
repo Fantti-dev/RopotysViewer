@@ -85,17 +85,27 @@ export default function PlaybackBar() {
               atTick: ticks[ticks.length - 1],
             }).catch(() => {})
 
-            usePlaybackStore.setState({ currentRound: nextRound, tickProgress: 0, isPlaying: true })
-            loadRoundData(selectedDemo.id, nextRound).catch((error) => {
-              window.electronAPI.debugLog('round.auto_advance.error', {
-                demoId: selectedDemo.id,
-                fromRound: currentRound,
-                toRound: nextRound,
-                error: error instanceof Error ? error.message : String(error),
-              }).catch(() => {})
-              usePlaybackStore.setState({ isPlaying: false })
-              isPlayingRef.current = false
-            })
+            // Force playback state transition false -> true so RAF loop always restarts
+            // after round data is applied for the next round.
+            usePlaybackStore.setState({ currentRound: nextRound, tickProgress: 0, isPlaying: false })
+            loadRoundData(selectedDemo.id, nextRound)
+              .then(() => {
+                usePlaybackStore.setState({ isPlaying: true })
+                window.electronAPI.debugLog('round.auto_advance.playback_resumed', {
+                  demoId: selectedDemo.id,
+                  roundNum: nextRound,
+                }).catch(() => {})
+              })
+              .catch((error) => {
+                window.electronAPI.debugLog('round.auto_advance.error', {
+                  demoId: selectedDemo.id,
+                  fromRound: currentRound,
+                  toRound: nextRound,
+                  error: error instanceof Error ? error.message : String(error),
+                }).catch(() => {})
+                usePlaybackStore.setState({ isPlaying: false })
+                isPlayingRef.current = false
+              })
           } else {
             usePlaybackStore.setState({ currentTick: ticks[ticks.length - 1], tickProgress: 0, isPlaying: false })
             isPlayingRef.current = false
