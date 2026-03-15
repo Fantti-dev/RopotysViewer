@@ -77,6 +77,7 @@ interface RoundCache {
 // Standalone funktio — käytettävissä sekä IPC-handlereissa että preloadissa
 async function loadRoundData(demoId: number, roundNum: number, options: RoundLoadOptions = {}): Promise<RoundCache> {
   const startedAt = Date.now()
+  writeDebugLog('round.load.main.start', { demoId, roundNum, options })
   const isDev     = process.env['ELECTRON_RENDERER_URL'] !== undefined
   const appRoot   = isDev ? join(__dirname, '../..') : join(app.getAppPath(), '../..')
   const pythonExe = join(appRoot, 'python', 'venv', 'Scripts', 'python.exe')
@@ -145,9 +146,21 @@ async function loadRoundData(demoId: number, roundNum: number, options: RoundLoa
           afterRoundRows: row.after_round_rows ?? 0,
         }
       }
-    } catch {
+    } catch (error) {
+      writeDebugLog('round.damage.window_diagnostics.error', {
+        demoId,
+        roundNum,
+        error: error instanceof Error ? error.message : String(error),
+      })
       // keep load resilient even if diagnostics query fails
     }
+  } else {
+    writeDebugLog('round.damage.window_diagnostics.skipped', {
+      demoId,
+      roundNum,
+      reason: 'includeKills=false',
+      options,
+    })
   }
 
   const [positions, kills, grenades, smokes, bomb, flash, shots, trajectories, infernoFires, damage] =
@@ -187,6 +200,7 @@ async function loadRoundData(demoId: number, roundNum: number, options: RoundLoa
       maxTick: damage[damage.length - 1]?.tick,
     } : null,
     options,
+    damageQueryExecuted: includeKills,
   })
   return roundData
 }
@@ -354,33 +368,46 @@ export function registerDataHandlers() {
 
   // ── Damage ─────────────────────────────────────────────────────────────────
   ipcMain.handle('data:getDamage', async (_, demoId: number, roundNum: number) => {
+    const startedAt = Date.now()
+    writeDebugLog('damage.endpoint.request', { demoId, roundNum })
     const p = await getPool()
-    const result = await p.request()
-      .input('demoId', sql.Int, demoId)
-      .input('roundNum', sql.Int, roundNum)
-      .query(`
-        SELECT d.*,
-               pa.name AS attacker_name,
-               pv.name AS victim_name
-        FROM damage d
-        JOIN rounds r ON r.demo_id = d.demo_id AND r.round_num = d.round_num
-        LEFT JOIN rounds rn ON rn.demo_id = r.demo_id AND rn.round_num = r.round_num + 1
-        LEFT JOIN players pa ON pa.steam_id = d.attacker_steam_id AND pa.demo_id = d.demo_id
-        LEFT JOIN players pv ON pv.steam_id = d.victim_steam_id AND pv.demo_id = d.demo_id
-        WHERE d.demo_id = @demoId AND d.round_num = @roundNum
-          AND d.tick >= r.start_tick
-          AND d.tick < ISNULL(rn.start_tick, 2147483647)
-        ORDER BY d.tick
-      `)
-    writeDebugLog('damage.endpoint.result', {
-      demoId,
-      roundNum,
-      rows: result.recordset.length,
-      tickRange: result.recordset.length > 0
-        ? { minTick: result.recordset[0]?.tick, maxTick: result.recordset[result.recordset.length - 1]?.tick }
-        : null,
-    })
-    return result.recordset
+    try {
+      const result = await p.request()
+        .input('demoId', sql.Int, demoId)
+        .input('roundNum', sql.Int, roundNum)
+        .query(`
+          SELECT d.*,
+                 pa.name AS attacker_name,
+                 pv.name AS victim_name
+          FROM damage d
+          JOIN rounds r ON r.demo_id = d.demo_id AND r.round_num = d.round_num
+          LEFT JOIN rounds rn ON rn.demo_id = r.demo_id AND rn.round_num = r.round_num + 1
+          LEFT JOIN players pa ON pa.steam_id = d.attacker_steam_id AND pa.demo_id = d.demo_id
+          LEFT JOIN players pv ON pv.steam_id = d.victim_steam_id AND pv.demo_id = d.demo_id
+          WHERE d.demo_id = @demoId AND d.round_num = @roundNum
+            AND d.tick >= r.start_tick
+            AND d.tick < ISNULL(rn.start_tick, 2147483647)
+          ORDER BY d.tick
+        `)
+      writeDebugLog('damage.endpoint.result', {
+        demoId,
+        roundNum,
+        rows: result.recordset.length,
+        durationMs: Date.now() - startedAt,
+        tickRange: result.recordset.length > 0
+          ? { minTick: result.recordset[0]?.tick, maxTick: result.recordset[result.recordset.length - 1]?.tick }
+          : null,
+      })
+      return result.recordset
+    } catch (error) {
+      writeDebugLog('damage.endpoint.error', {
+        demoId,
+        roundNum,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
   })
 
   // ── Granaatit ──────────────────────────────────────────────────────────────
@@ -547,8 +574,11 @@ export function registerDataHandlers() {
 
   // ── Kumulatiiviset tilastot suoraan SQL:stä ───────────────────────────────
   ipcMain.handle('data:getCumulativeStats', async (_, demoId: number, upToRound: number) => {
+    const startedAt = Date.now()
+    writeDebugLog('damage.cumulative.request', { demoId, upToRound })
     const p = await getPool()
-    const [kills, damage, flash] = await Promise.all([
+    try {
+      const [kills, damage, flash] = await Promise.all([
       p.request()
         .input('demoId', sql.Int, demoId)
         .input('upToRound', sql.Int, upToRound)
@@ -619,19 +649,29 @@ export function registerDataHandlers() {
           GROUP BY fe.thrower_steam_id
         `),
     ])
-    writeDebugLog('damage.cumulative.result', {
-      demoId,
-      upToRound,
-      rows: damage.recordset.length,
-      totalDamage: damage.recordset.reduce((acc: number, r: any) => acc + Number(r.total_damage ?? 0), 0),
-      totalUtilDamage: damage.recordset.reduce((acc: number, r: any) => acc + Number(r.util_damage ?? 0), 0),
-      topPlayers: damage.recordset
-        .slice()
-        .sort((a: any, b: any) => Number(b.total_damage ?? 0) - Number(a.total_damage ?? 0))
-        .slice(0, 5)
-        .map((r: any) => ({ steamId: r.steam_id, totalDamage: r.total_damage, utilDamage: r.util_damage })),
-    })
-    return { kills: kills.recordset, damage: damage.recordset, flash: flash.recordset }
+      writeDebugLog('damage.cumulative.result', {
+        demoId,
+        upToRound,
+        rows: damage.recordset.length,
+        durationMs: Date.now() - startedAt,
+        totalDamage: damage.recordset.reduce((acc: number, r: any) => acc + Number(r.total_damage ?? 0), 0),
+        totalUtilDamage: damage.recordset.reduce((acc: number, r: any) => acc + Number(r.util_damage ?? 0), 0),
+        topPlayers: damage.recordset
+          .slice()
+          .sort((a: any, b: any) => Number(b.total_damage ?? 0) - Number(a.total_damage ?? 0))
+          .slice(0, 5)
+          .map((r: any) => ({ steamId: r.steam_id, totalDamage: r.total_damage, utilDamage: r.util_damage })),
+      })
+      return { kills: kills.recordset, damage: damage.recordset, flash: flash.recordset }
+    } catch (error) {
+      writeDebugLog('damage.cumulative.error', {
+        demoId,
+        upToRound,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
   })
 
   ipcMain.handle('debug:log', async (_, event: string, payload?: unknown) => {
